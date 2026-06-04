@@ -878,6 +878,15 @@ export async function generateVoiceResponse(
     // 1. Extract existing entities from history
     const state = extractConversationState(conversationHistory, userMessage);
     let customerName = state.customerName;
+    if (!customerName && callerName && 
+        !callerName.includes("Phone Call") && 
+        !callerName.includes("Phone Caller") && 
+        !callerName.includes("Web Client") && 
+        !callerName.includes("Web Chat") && 
+        callerName.toLowerCase() !== "customer" && 
+        callerName.toLowerCase() !== "unknown") {
+      customerName = callerName;
+    }
     const lastAgentMessage = state.lastAgentMessage;
 
     // Extract IDs from current message + history

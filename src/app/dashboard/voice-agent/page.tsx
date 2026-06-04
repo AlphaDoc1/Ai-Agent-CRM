@@ -38,7 +38,7 @@ export default function VoiceAgentPage() {
   const [voipName, setVoipName] = useState("");
   const [countryCode, setCountryCode] = useState("+91");
   const [voipPhone, setVoipPhone] = useState("");
-  const [voipType, setVoipType] = useState<"ai" | "service">("ai");
+  const [voipType, setVoipType] = useState<"ai" | "service">("service");
   const [voipCallActive, setVoipCallActive] = useState(false);
   const [voipCallSid, setVoipCallSid] = useState("");
   const [voipStatus, setVoipStatus] = useState("Idle");
@@ -706,27 +706,79 @@ export default function VoiceAgentPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
               {!voipCallActive ? (
-                <form onSubmit={startVoipCall} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <form onSubmit={startVoipCall} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                  {/* Header */}
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    paddingBottom: "16px",
+                    borderBottom: "1px solid var(--border-subtle)"
+                  }}>
+                    <div style={{
+                      width: "36px",
+                      height: "36px",
+                      borderRadius: "10px",
+                      background: "rgba(139, 92, 246, 0.15)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0
+                    }}>
+                      <Phone size={16} color="var(--accent-purple)" />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>
+                        AI Customer Service Call
+                      </h3>
+                      <p style={{ fontSize: "11px", color: "var(--text-muted)", margin: 0, marginTop: "2px" }}>
+                        Enter details below and the AI agent will call the number
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Name Field */}
                   <div>
-                    <label style={{ display: "block", fontSize: "12px", color: "var(--text-secondary)", fontWeight: 600, marginBottom: "6px" }}>
-                      YOUR NAME
+                    <label style={{
+                      display: "block",
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      fontWeight: 600,
+                      marginBottom: "8px",
+                      letterSpacing: "0.5px"
+                    }}>
+                      CALLER NAME
                     </label>
                     <input
                       type="text"
                       className="input"
                       required
-                      placeholder="Your name"
+                      placeholder="e.g. Rajesh Sharma"
                       value={voipName}
                       onChange={(e) => setVoipName(e.target.value)}
                       disabled={isTriggeringVoip}
+                      style={{
+                        width: "100%",
+                        padding: "12px 14px",
+                        fontSize: "14px",
+                        boxSizing: "border-box"
+                      }}
                     />
                   </div>
 
+                  {/* Phone Field */}
                   <div>
-                    <label style={{ display: "block", fontSize: "12px", color: "var(--text-secondary)", fontWeight: 600, marginBottom: "6px" }}>
-                      YOUR PHONE NUMBER
+                    <label style={{
+                      display: "block",
+                      fontSize: "12px",
+                      color: "var(--text-secondary)",
+                      fontWeight: 600,
+                      marginBottom: "8px",
+                      letterSpacing: "0.5px"
+                    }}>
+                      PHONE NUMBER
                     </label>
-                    <div style={{ display: "flex", gap: "8px" }}>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "stretch" }}>
                       <select
                         value={countryCode}
                         onChange={(e) => setCountryCode(e.target.value)}
@@ -736,11 +788,12 @@ export default function VoiceAgentPage() {
                           border: "1px solid var(--border-default)",
                           borderRadius: "var(--radius-md)",
                           color: "var(--text-primary)",
-                          padding: "10px 14px",
+                          padding: "12px 10px",
                           fontSize: "14px",
                           outline: "none",
                           cursor: "pointer",
-                          minWidth: "85px"
+                          minWidth: "90px",
+                          flexShrink: 0
                         }}
                       >
                         <option value="+91">🇮🇳 +91</option>
@@ -757,97 +810,67 @@ export default function VoiceAgentPage() {
                         value={voipPhone}
                         onChange={(e) => setVoipPhone(e.target.value.replace(/\D/g, ""))}
                         disabled={isTriggeringVoip}
-                        style={{ flex: 1 }}
+                        maxLength={10}
+                        style={{
+                          flex: 1,
+                          padding: "12px 14px",
+                          fontSize: "14px",
+                          boxSizing: "border-box"
+                        }}
                       />
                     </div>
                   </div>
 
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", color: "var(--text-secondary)", fontWeight: 600, marginBottom: "8px" }}>
-                      SELECT SERVICE ROUTE
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                      <label
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "4px",
-                          padding: "12px",
-                          borderRadius: "8px",
-                          background: voipType === "ai" ? "rgba(59, 130, 246, 0.1)" : "var(--bg-secondary)",
-                          border: `1px solid ${voipType === "ai" ? "var(--accent-blue)" : "var(--border-default)"}`,
-                          cursor: "pointer",
-                          transition: "all 0.2s ease"
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <input
-                            type="radio"
-                            name="voipType"
-                            checked={voipType === "ai"}
-                            onChange={() => setVoipType("ai")}
-                            style={{ accentColor: "var(--accent-blue)" }}
-                          />
-                          <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>AI Sales Bot</span>
-                        </div>
-                        <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Distributes leads to Indian states</span>
-                      </label>
-
-                      <label
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "4px",
-                          padding: "12px",
-                          borderRadius: "8px",
-                          background: voipType === "service" ? "rgba(139, 92, 246, 0.1)" : "var(--bg-secondary)",
-                          border: `1px solid ${voipType === "service" ? "var(--accent-purple)" : "var(--border-default)"}`,
-                          cursor: "pointer",
-                          transition: "all 0.2s ease"
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <input
-                            type="radio"
-                            name="voipType"
-                            checked={voipType === "service"}
-                            onChange={() => setVoipType("service")}
-                            style={{ accentColor: "var(--accent-purple)" }}
-                          />
-                          <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>Customer Service</span>
-                        </div>
-                        <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Assists with support issues</span>
-                      </label>
-                    </div>
-                  </div>
-
+                  {/* Call Button */}
                   <button
                     type="submit"
                     className="btn btn-primary"
-                    disabled={isTriggeringVoip || (!ollamaHealthy && !isCloudMode)}
-                    style={{ width: "100%", padding: "14px", marginTop: "8px" }}
+                    disabled={isTriggeringVoip || (!ollamaHealthy && !isCloudMode) || !voipName.trim() || !voipPhone.trim()}
+                    style={{
+                      width: "100%",
+                      padding: "14px",
+                      marginTop: "4px",
+                      fontSize: "14px",
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "8px"
+                    }}
                   >
                     {isTriggeringVoip ? (
-                      <>Dialing your phone...</>
+                      <>
+                        <span style={{
+                          width: "14px",
+                          height: "14px",
+                          border: "2px solid rgba(255,255,255,0.3)",
+                          borderTopColor: "white",
+                          borderRadius: "50%",
+                          animation: "spin 0.8s linear infinite",
+                          display: "inline-block"
+                        }} />
+                        Dialing your phone...
+                      </>
                     ) : (
                       <>
-                        <Phone size={16} /> Call My Phone Now
+                        <Phone size={16} /> Call Now
                       </>
                     )}
                   </button>
 
+                  {/* Tip Banner */}
                   <div
                     style={{
                       background: "rgba(245, 158, 11, 0.08)",
                       border: "1px solid rgba(245, 158, 11, 0.2)",
                       borderRadius: "8px",
-                      padding: "12px",
+                      padding: "10px 12px",
                       fontSize: "11px",
                       color: "var(--accent-orange)",
-                      lineHeight: "1.4"
+                      lineHeight: "1.5"
                     }}
                   >
-                    <strong>💡 Twilio Free Trial Tip:</strong> Outbound calls are only allowed to verified phone numbers on your account. Answer the call and press any key to connect the AI code pipeline.
+                    <strong>💡 Tip:</strong> Outbound calls on Twilio Free Trial are limited to verified numbers. Answer the call and press any key to connect the AI agent.
                   </div>
                 </form>
               ) : (
