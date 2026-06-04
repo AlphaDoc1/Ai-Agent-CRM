@@ -1,0 +1,99 @@
+// ============================================
+// API Route: Distributors (CRUD)
+// GET /api/distributors — List all
+// POST /api/distributors — Create
+// ============================================
+import { NextRequest, NextResponse } from "next/server";
+import { createAdminClient } from "@/lib/supabase/server";
+import { createDistributorSchema } from "@/lib/validations";
+import { ApiResponse, Distributor } from "@/lib/types";
+
+export async function GET() {
+  try {
+    const supabase = createAdminClient();
+
+    const { data, error } = await supabase
+      .from("distributors")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    return NextResponse.json({
+      success: true,
+      data,
+    } as ApiResponse<Distributor[]>);
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch distributors",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    const validation = createDistributorSchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Validation failed",
+          data: validation.error.flatten().fieldErrors,
+        },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createAdminClient();
+    const input = validation.data;
+
+    const { data, error } = await supabase
+      .from("distributors")
+      .insert({
+        name: input.name,
+        state: input.state,
+        region: input.region || null,
+        city: input.city || null,
+        phone: input.phone,
+        email: input.email,
+        address: input.address || null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Log activity
+    await supabase.from("activity_logs").insert({
+      entity_type: "distributor",
+      entity_id: data.id,
+      action: "distributor_created",
+      details: { name: input.name, state: input.state },
+    });
+
+    return NextResponse.json(
+      { success: true, data } as ApiResponse<Distributor>,
+      { status: 201 }
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to create distributor",
+      },
+      { status: 500 }
+    );
+  }
+}

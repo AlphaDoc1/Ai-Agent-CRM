@@ -1,65 +1,159 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import Link from "next/link";
+import { Zap, ArrowRight, BarChart3, Mic, Users, Brain } from "lucide-react";
+
+export default function LandingPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "40px 20px",
+        background:
+          "radial-gradient(ellipse at top, rgba(59, 130, 246, 0.08) 0%, transparent 50%), var(--bg-primary)",
+      }}
+    >
+      {/* Hero */}
+      <div
+        className="animate-fade-in"
+        style={{ textAlign: "center", maxWidth: "720px" }}
+      >
+        {/* Badge */}
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "6px 16px",
+            borderRadius: "100px",
+            background: "rgba(59, 130, 246, 0.1)",
+            border: "1px solid rgba(59, 130, 246, 0.2)",
+            fontSize: "13px",
+            color: "var(--accent-blue)",
+            marginBottom: "24px",
+          }}
+        >
+          <Zap size={14} />
+          AI-Powered CRM Platform
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        <h1
+          style={{
+            fontSize: "clamp(36px, 5vw, 56px)",
+            fontWeight: 800,
+            lineHeight: 1.1,
+            marginBottom: "20px",
+            letterSpacing: "-0.02em",
+          }}
+        >
+          Intelligent{" "}
+          <span className="gradient-text">Lead Management</span>
+          <br />
+          & Distribution
+        </h1>
+
+        <p
+          style={{
+            fontSize: "18px",
+            color: "var(--text-secondary)",
+            marginBottom: "36px",
+            lineHeight: 1.7,
+          }}
+        >
+          Automate inquiry processing with AI, assign leads to distributors
+          intelligently, and engage customers with our voice AI agent — all
+          from one powerful dashboard.
+        </p>
+
+        <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+          <Link href="/dashboard" className="btn btn-primary" style={{ fontSize: "16px", padding: "14px 28px" }}>
+            Open Dashboard
+            <ArrowRight size={18} />
+          </Link>
+          <Link
+            href="/dashboard/voice-agent"
+            className="btn btn-secondary"
+            style={{ fontSize: "16px", padding: "14px 28px" }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <Mic size={18} />
+            Try Voice Agent
+          </Link>
         </div>
-      </main>
+      </div>
+
+      {/* Features Grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: "20px",
+          maxWidth: "900px",
+          width: "100%",
+          marginTop: "80px",
+        }}
+      >
+        {[
+          {
+            icon: <Brain size={24} />,
+            title: "AI Analysis",
+            desc: "Every inquiry is analyzed by Llama 3 for priority, type, and routing.",
+            gradient: "linear-gradient(135deg, #8b5cf6, #6366f1)",
+          },
+          {
+            icon: <Users size={24} />,
+            title: "Auto Routing",
+            desc: "Leads are automatically assigned to the best distributor by state.",
+            gradient: "linear-gradient(135deg, #10b981, #059669)",
+          },
+          {
+            icon: <Mic size={24} />,
+            title: "Voice Agent",
+            desc: "Browser-based voice AI for real-time customer conversations.",
+            gradient: "linear-gradient(135deg, #f59e0b, #ef4444)",
+          },
+          {
+            icon: <BarChart3 size={24} />,
+            title: "Live Analytics",
+            desc: "Real-time dashboards with charts, trends, and KPIs.",
+            gradient: "var(--gradient-primary)",
+          },
+        ].map((feature, i) => (
+          <div
+            key={i}
+            className="glass-card animate-fade-in"
+            style={{
+              padding: "28px",
+              animationDelay: `${i * 0.1}s`,
+            }}
+          >
+            <div
+              style={{
+                width: "48px",
+                height: "48px",
+                borderRadius: "12px",
+                background: feature.gradient,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: "16px",
+                color: "white",
+              }}
+            >
+              {feature.icon}
+            </div>
+            <h3 style={{ fontSize: "16px", fontWeight: 600, marginBottom: "6px" }}>
+              {feature.title}
+            </h3>
+            <p style={{ fontSize: "14px", color: "var(--text-secondary)", lineHeight: 1.6 }}>
+              {feature.desc}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
