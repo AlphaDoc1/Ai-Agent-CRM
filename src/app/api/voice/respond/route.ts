@@ -17,16 +17,21 @@ export async function POST(request: NextRequest) {
     const from = (formData.get("From") as string) || "Unknown";
     const speechResult = formData.get("SpeechResult") as string;
 
+    // Resolve public URL
+    const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3000";
+    const proto = request.headers.get("x-forwarded-proto") || "http";
+    const publicUrl = `${proto}://${host}`;
+
     console.log(`[Telephony] Gathered speech. CallSid: ${callSid}, Speech: "${speechResult}"`);
 
     if (!speechResult) {
       // If we didn't capture any speech, prompt the user again
       const retryTwiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural" language="en-US">
+  <Say language="en-US">
     I'm sorry, I didn't quite catch that. Could you repeat it?
   </Say>
-  <Gather input="speech" action="/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="en-US" />
+  <Gather input="speech" action="${publicUrl}/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="en-US" />
 </Response>`;
       return new NextResponse(retryTwiml, {
         headers: { "Content-Type": "application/xml" },
@@ -34,13 +39,12 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createAdminClient();
-    const formattedPhone = `${from}_${callSid}`;
 
-    // 1. Fetch the active call log and history
+    // 1. Fetch the active call log and history using CallSid
     const { data: callLog, error: fetchError } = await supabase
       .from("call_logs")
       .select("*")
-      .eq("caller_phone", formattedPhone)
+      .eq("call_sid", callSid)
       .eq("status", "in_progress")
       .order("created_at", { ascending: false })
       .limit(1)
@@ -49,7 +53,7 @@ export async function POST(request: NextRequest) {
     let historyLines: string[] = [];
 
     if (fetchError || !callLog) {
-      console.warn(`[Telephony] Call log not found for ${formattedPhone}. Creating a new one...`);
+      console.warn(`[Telephony] Call log not found for CallSid: ${callSid}.`);
     } else {
       const currentTranscript = callLog.transcript || "";
       if (currentTranscript.trim()) {
@@ -59,7 +63,9 @@ export async function POST(request: NextRequest) {
 
     // 2. Query Llama 3 / generate response
     const callerName = callLog?.caller_name ? callLog.caller_name.replace(/\s+\(\+?\d+\)/g, "").trim() : "Customer";
-    console.log(`[Telephony] Querying Ollama Llama 3 for voice reply (${callType}) for caller "${callerName}"...`);
+    const preferredLang = callLog?.preferred_language || "en-US";
+    
+    console.log(`[Telephony] Querying AI for voice reply. Lang: ${preferredLang}, Caller: ${callerName}`);
     
     const agentResponse = await generateVoiceResponse(
       speechResult,
@@ -70,7 +76,7 @@ export async function POST(request: NextRequest) {
     );
     
     const reply = agentResponse.reply;
-    console.log(`[Telephony] Llama 3 reply: "${reply}"`);
+    console.log(`[Telephony] AI reply: "${reply}"`);
 
     const isEnding = agentResponse.status === "ENDED" || agentResponse.status === "ESCALATED";
 
@@ -112,10 +118,10 @@ export async function POST(request: NextRequest) {
     // 4. Return TwiML with the AI response and a new Gather listener (or Hangup if done)
     let twiml = "";
     if (isEnding) {
-      console.log(`[Telephony] Ending call for CallSid: ${callSid} based on goodbye/transfer status: ${agentResponse.status}`);
+      console.log(`[Telephony] Ending call for CallSid: ${callSid} based on status: ${agentResponse.status}`);
       twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural" language="en-US">
+  <Say language="${preferredLang}">
     ${reply}
   </Say>
   <Hangup/>
@@ -123,10 +129,10 @@ export async function POST(request: NextRequest) {
     } else {
       twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural" language="en-US">
+  <Say language="${preferredLang}">
     ${reply}
   </Say>
-  <Gather input="speech" action="/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="en-US" />
+  <Gather input="speech" action="${publicUrl}/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="${preferredLang}" />
 </Response>`;
     }
 
@@ -137,10 +143,16 @@ export async function POST(request: NextRequest) {
     console.error("[Telephony] Error in speech response route:", error);
     const { searchParams } = new URL(request.url);
     const callType = searchParams.get("type") || "ai";
+    
+    // Resolve public URL again in catch block to be safe
+    const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3000";
+    const proto = request.headers.get("x-forwarded-proto") || "http";
+    const publicUrl = `${proto}://${host}`;
+
     const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">Sorry, I had trouble processing that. Can you repeat it?</Say>
-  <Gather input="speech" action="/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="en-US" />
+  <Say language="en-US">Sorry, I had trouble processing that. Can you repeat it?</Say>
+  <Gather input="speech" action="${publicUrl}/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="en-US" />
 </Response>`;
     return new NextResponse(errorTwiml, {
       headers: { "Content-Type": "application/xml" },

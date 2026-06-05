@@ -7,7 +7,7 @@ import { AIAnalysisResponse, Distributor } from "@/lib/types";
 /**
  * Find the best distributor for a given state.
  * Matches by state name (case-insensitive).
- * If no exact match, returns the distributor with the fewest assigned leads.
+ * If no exact match, returns the first available distributor.
  */
 export async function findDistributorByState(
   state: string
@@ -19,19 +19,15 @@ export async function findDistributorByState(
     .from("distributors")
     .select("*")
     .ilike("state", state)
-    .eq("is_active", true)
-    .order("total_leads_assigned", { ascending: true })
     .limit(1)
     .single();
 
   if (exactMatch) return exactMatch as Distributor;
 
-  // Fallback: distributor with fewest leads
+  // Fallback: first distributor
   const { data: fallback } = await supabase
     .from("distributors")
     .select("*")
-    .eq("is_active", true)
-    .order("total_leads_assigned", { ascending: true })
     .limit(1)
     .single();
 
@@ -43,8 +39,7 @@ export async function findDistributorByState(
  * 1. Find matching distributor
  * 2. Create assignment record
  * 3. Update inquiry status
- * 4. Increment distributor lead count
- * 5. Log activity
+ * 4. Log activity
  */
 export async function routeLead(
   inquiryId: string,
@@ -73,7 +68,7 @@ export async function routeLead(
       .from("lead_assignments")
       .insert({
         inquiry_id: inquiryId,
-        distributor_id: distributor.id,
+        distributor_id: distributor.distributor_id,
         assigned_by: "ai_auto",
         status: "pending",
       });
@@ -85,7 +80,7 @@ export async function routeLead(
       .from("inquiries")
       .update({
         status: "assigned",
-        assigned_distributor_id: distributor.id,
+        assigned_distributor_id: distributor.distributor_id,
         priority: aiAnalysis.lead_priority as
           | "low"
           | "medium"
@@ -99,35 +94,20 @@ export async function routeLead(
 
     if (updateError) throw updateError;
 
-    // 4. Increment distributor lead count
-    const { error: rpcError } = await supabase.rpc("increment_distributor_leads", {
-      dist_id: distributor.id,
-    });
-
-    if (rpcError) {
-      // Fallback: manual increment if RPC doesn't exist
-      await supabase
-        .from("distributors")
-        .update({
-          total_leads_assigned: (distributor.total_leads_assigned || 0) + 1,
-        })
-        .eq("id", distributor.id);
-    }
-
     // 5. Log activity
     await supabase.from("activity_logs").insert({
       entity_type: "assignment",
       entity_id: inquiryId,
       action: "lead_auto_assigned",
       details: {
-        distributor_id: distributor.id,
+        distributor_id: distributor.distributor_id,
         distributor_name: distributor.name,
         state: aiAnalysis.state,
         priority: aiAnalysis.lead_priority,
       },
     });
 
-    return { success: true, distributorId: distributor.id };
+    return { success: true, distributorId: distributor.distributor_id };
   } catch (error) {
     console.error("Lead routing error:", error);
     return {

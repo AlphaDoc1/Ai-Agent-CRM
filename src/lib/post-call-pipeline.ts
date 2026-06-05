@@ -99,58 +99,103 @@ export async function processPostCall(callId: string): Promise<PostCallPipelineR
     .map((t: { speaker: string; text: string }) => `${t.speaker}: ${t.text}`)
     .join("\n");
 
-  // Step 3: Send to LLM for classification and summary
-  let callGroup: string;
-  let summaryNote: string;
-  try {
-    const prompt = `Analyze this customer support call transcript and provide:
-1. Classification into ONE of these groups: ORDER, PAYMENT, PRODUCT, ACCOUNT, GENERAL
-2. A concise 2-3 sentence summary of the call.
+  // Step 3: Send to LLM for classification and summary (NEW INSTRUCTIONS)
+  let analysis: {
+    main_issue: string;
+    resolution_status: string;
+    sentiment: string;
+    keywords: string[];
+    group: string;
+    description: string;
+    agent_action: string;
+  };
 
+  try {
+    const prompt = `Analyze this Elanpro (Commercial Refrigeration) customer support call conversation.
 CUSTOMER MESSAGES:
 ${customerLines.join("\n")}
 
 AGENT MESSAGES:
 ${agentLines.join("\n")}
 
-Respond with ONLY a JSON object:
-{"call_group": "ORDER|PAYMENT|PRODUCT|ACCOUNT|GENERAL", "summary": "2-3 sentence summary"}`;
+STRICT INSTRUCTIONS:
+Extract the following information and respond with ONLY a JSON object:
+1. main_issue: A 1-sentence summary of the core problem.
+2. resolution_status: Exactly one of "Resolved", "Unresolved", or "Escalated".
+3. sentiment: Exactly one of "Positive", "Neutral", or "Frustrated".
+4. keywords: An array of 3-5 key problem keywords.
+5. group: Categorize into ONE: "ORDER_GROUP", "PAYMENT_GROUP", "PRODUCT_GROUP", "ACCOUNT_GROUP", or "GENERAL_GROUP".
+   - ORDER_GROUP: wrong item, missing item, not delivered, late delivery, return, replacement
+   - PAYMENT_GROUP: refund, double charge, payment failed, billing issue
+   - PRODUCT_GROUP: defective product, quality issue, product info, warranty
+   - ACCOUNT_GROUP: login, profile, password, account access
+   - GENERAL_GROUP: anything else
+6. description: A 2-3 line description of what the customer said.
+7. agent_action: What the agent responded or did.
+
+JSON format:
+{
+  "main_issue": "...",
+  "resolution_status": "...",
+  "sentiment": "...",
+  "keywords": ["...", "..."],
+  "group": "...",
+  "description": "...",
+  "agent_action": "..."
+}`;
 
     const raw = await callPipelineLLM(prompt);
     const cleaned = raw.trim().replace(/\`\`\`json\s*/gi, "").replace(/\`\`\`\s*/g, "");
     const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON in LLM response");
-
-    const parsed = JSON.parse(jsonMatch[0]);
-    const validGroups = ["ORDER", "PAYMENT", "PRODUCT", "ACCOUNT", "GENERAL"];
-    callGroup = validGroups.includes(parsed.call_group?.toUpperCase())
-      ? parsed.call_group.toUpperCase()
-      : "GENERAL";
-    summaryNote = parsed.summary || "Call completed. No summary generated.";
+    analysis = JSON.parse(jsonMatch[0]);
   } catch (err) {
-    console.error("[PostCallPipeline] LLM classification failed:", err);
-    await logPipelineError(supabase, callId, "LLM_CLASSIFICATION_FAILED");
-    return { success: false, error: "LLM_CLASSIFICATION_FAILED" };
+    console.error("[PostCallPipeline] LLM analysis failed:", err);
+    await logPipelineError(supabase, callId, "LLM_ANALYSIS_FAILED");
+    return { success: false, error: "LLM_ANALYSIS_FAILED" };
   }
 
-  // Step 4: Update call_analysis with group and summary
+  // Step 4: Create Call Summary Note (EXACT FORMAT)
+  let callLogData;
+  let analysisData;
   try {
-    // Fetch current analysis to check resolution status
-    const { data: analysis } = await supabase
-      .from("call_analysis")
-      .select("resolution_status")
-      .eq("call_id", callId)
-      .single();
+    const { data: log } = await supabase.from("call_logs").select("*").eq("id", callId).single();
+    const { data: ana } = await supabase.from("call_analysis").select("*").eq("call_id", callId).single();
+    callLogData = log;
+    analysisData = ana;
+  } catch { /* Ignore */ }
 
-    const isEscalated = analysis?.resolution_status === "ESCALATED";
+  const timestamp = callLogData?.created_at ? new Date(callLogData.created_at).toLocaleString() : new Date().toLocaleString();
+  const actionRequired = (analysis.resolution_status === "Unresolved" || analysis.resolution_status === "Escalated") ? "Yes" : "No";
+  
+  const summaryNote = `--- 
+CALL SUMMARY 
+Call ID: ${callId} 
+Date & Time: ${timestamp} 
+Customer Name: ${callLogData?.caller_name || "Unknown"} 
+Customer ID: ${analysisData?.customer_id || "NA"} 
+Order ID: ${analysisData?.order_id || "NA"} 
+Issue Category: ${analysis.group} 
+Issue Description: ${analysis.description} 
+Agent Action Taken: ${analysis.agent_action} 
+Resolution Status: ${analysis.resolution_status} 
+Customer Sentiment: ${analysis.sentiment} 
+Action Required: ${actionRequired} 
+---`;
+
+  // Step 5: Route to Dashboard Group
+  try {
+    const isUrgent = actionRequired === "Yes";
 
     const { error } = await supabase
       .from("call_analysis")
       .update({
-        call_group: callGroup,
+        call_group: analysis.group,
         summary_note: summaryNote,
         notification_flag: true,
-        urgent_flag: isEscalated,
+        urgent_flag: isUrgent,
+        resolution_status: analysis.resolution_status.toUpperCase(),
+        sentiment_score: analysis.sentiment === "Positive" ? 0.9 : analysis.sentiment === "Neutral" ? 0.5 : 0.1,
         pipeline_error: null,
         updated_at: new Date().toISOString(),
       })
@@ -158,72 +203,53 @@ Respond with ONLY a JSON object:
 
     if (error) throw error;
   } catch (err) {
-    console.error("[PostCallPipeline] Summary update failed:", err);
-    await logPipelineError(supabase, callId, "SUMMARY_UPDATE_FAILED");
-    return { success: false, error: "SUMMARY_UPDATE_FAILED" };
+    console.error("[PostCallPipeline] Analysis update failed:", err);
+    await logPipelineError(supabase, callId, "ANALYSIS_UPDATE_FAILED");
+    return { success: false, error: "ANALYSIS_UPDATE_FAILED" };
   }
 
-  // Step 5: Fetch caller name for notification title
-  let callerName = "Customer";
+  // Step 6: Group Notification
   try {
-    const { data: callLog } = await supabase
-      .from("call_logs")
-      .select("caller_name")
-      .eq("id", callId)
-      .single();
-    if (callLog?.caller_name) {
-      callerName = callLog.caller_name;
-    }
-  } catch {
-    // Non-critical, use default
-  }
-
-  // Step 6: Fetch resolution status for notification
-  let isEscalated = false;
-  try {
-    const { data: analysis } = await supabase
-      .from("call_analysis")
-      .select("resolution_status")
-      .eq("call_id", callId)
-      .single();
-    isEscalated = analysis?.resolution_status === "ESCALATED";
-  } catch {
-    // Non-critical
-  }
-
-  // Step 7: Insert notification
-  try {
-    const title = isEscalated
-      ? `Escalated ${callGroup} Issue — ${callerName}`
-      : `${callGroup} Call Completed — ${callerName}`;
+    const notificationMessage = `New support case assigned. 
+Customer ${callLogData?.caller_name || "Customer"} (ID: ${analysisData?.customer_id || "NA"}) reported a ${analysis.group} issue. 
+Status: ${analysis.resolution_status}. 
+Action Required: ${actionRequired}. 
+Check dashboard for full summary.`;
 
     const { error } = await supabase.from("notifications").insert({
       call_id: callId,
-      title,
-      message: summaryNote,
-      call_group: callGroup,
-      urgent_flag: isEscalated,
+      title: `New Support Case: ${analysis.group}`,
+      message: notificationMessage,
+      call_group: analysis.group,
+      urgent_flag: (analysis.resolution_status === "Unresolved" || analysis.resolution_status === "Escalated"),
     });
 
     if (error) throw error;
   } catch (err) {
     console.error("[PostCallPipeline] Notification insert failed:", err);
-    await logPipelineError(supabase, callId, "NOTIFICATION_INSERT_FAILED");
-    return { success: false, error: "NOTIFICATION_INSERT_FAILED" };
+    // Non-critical but log it
   }
 
-  // Step 8: Update call_logs with final AI summary
+  // Step 8: Update call_logs with final AI summary and separated transcript
   try {
+    const formattedTranscript = turns
+      .map((t: { speaker: string; text: string; created_at: string }) => 
+        `[${new Date(t.created_at).toLocaleTimeString()}] ${t.speaker}: ${t.text}`
+      )
+      .join("\n");
+
     await supabase
       .from("call_logs")
-      .update({ ai_summary: summaryNote })
+      .update({ 
+        ai_summary: analysis.main_issue, // Use the 1-sentence issue as summary
+        transcript: formattedTranscript 
+      })
       .eq("id", callId);
   } catch (err) {
-    console.warn("[PostCallPipeline] ai_summary update warning:", err);
-    // Non-critical — don't fail the pipeline for this
+    console.warn("[PostCallPipeline] call_logs final update warning:", err);
   }
 
-  console.log(`[PostCallPipeline] Successfully processed call ${callId}. Group: ${callGroup}`);
+  console.log(`[PostCallPipeline] Successfully processed call ${callId}. Group: ${analysis.group}`);
   return { success: true };
 }
 

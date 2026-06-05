@@ -22,25 +22,19 @@ export async function POST(request: NextRequest) {
     const formattedPhone = `${from}_${callSid}`;
 
     const { error: insertError } = await supabase.from("call_logs").insert({
+      call_sid: callSid,
       caller_phone: formattedPhone,
       caller_name: callerName === "Phone Caller" ? `Phone Call (${from})` : callerName,
-      status: "in_progress",
+      status: "initiated",
       transcript: "",
+      source: 'voice',
+      preferred_language: 'en-IN'
     });
 
     if (insertError) {
-      console.error("[Telephony] Failed to create call log in database:", insertError);
+      console.error("[Telephony] Failed to create call log in database. Verify call_sid and preferred_language columns exist and 'initiated' status is allowed.", insertError.message);
+      // We continue even if DB insert fails to ensure the call isn't dropped
     }
-
-    // Save greeting to transcript and create initial call_turns/call_analysis entries
-    const { data: newCallLog } = await supabase
-      .from("call_logs")
-      .select("id")
-      .eq("caller_phone", formattedPhone)
-      .eq("status", "in_progress")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
 
     // Resolve the dynamic public URL (e.g., your ngrok URL) from proxy headers
     const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3000";
@@ -50,50 +44,35 @@ export async function POST(request: NextRequest) {
     // Trigger call recording programmatically
     await startTwilioCallRecording(callSid, publicUrl);
 
-    // Return TwiML response to answer call and speak greeting (greet by name if provided)
-    let greetingText = "";
-    if (callType === "service") {
-      greetingText = callerName === "Phone Caller"
-        ? "Hello! Thank you for contacting our customer service department. How can I assist you with your support inquiry today?"
-        : `Hello ${callerName}! Thank you for contacting our customer service department. How can I assist you with your support inquiry today?`;
-    } else {
-      greetingText = callerName === "Phone Caller"
-        ? "Hello! Thank you for calling our team. How can I help you today?"
-        : `Hello ${callerName}! Thank you for calling our team. How can I help you today?`;
-    }
+    // Webhook URL to call when the user answers, including the custom caller name and type query parameters
+    // NOTE: For XML attributes like 'action', we MUST escape '&' as '&amp;'
+    const actionUrl = `${publicUrl}/api/voice/language?type=${encodeURIComponent(callType)}&amp;name=${encodeURIComponent(callerName)}`;
 
-    // Save greeting to transcript, call_turns, and init call_analysis
-    if (newCallLog?.id) {
-      await supabase
-        .from("call_logs")
-        .update({ transcript: `Agent: ${greetingText}`, source: 'voice' })
-        .eq("id", newCallLog.id);
-
-      await supabase.from("call_turns").insert({
-        call_id: newCallLog.id,
-        turn_index: 0,
-        speaker: "AGENT",
-        text: greetingText,
-      });
-
-      await supabase.from("call_analysis").insert({
-        call_id: newCallLog.id,
-        resolution_status: "ACTIVE",
-        turn_count: 1,
-      });
-    }
+    console.log(`[Telephony] Generated TwiML menu for CallSid: ${callSid}. Action URL: ${actionUrl.replace(/&amp;/g, '&')}`);
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural" language="en-US">
-    ${greetingText}
-  </Say>
-  <Gather input="speech" action="/api/voice/respond?type=${encodeURIComponent(callType)}" speechTimeout="auto" enhanced="true" language="en-US">
-    <!-- Listen for user input. If silence, wait up to 5 seconds -->
+  <Gather numDigits="1" action="${actionUrl}" timeout="10" method="POST">
+    <Say language="en-US">
+      For English, press 1. 
+    </Say>
+    <Say language="hi-IN">
+      Hindi ke liye, do dabaye. 
+    </Say>
+    <Say language="kn-IN">
+      Kannada-gagi, mooru otti. 
+    </Say>
+    <Say language="ta-IN">
+      Tamil-ukku, naangu amuthavum. 
+    </Say>
+    <Say language="te-IN">
+      Telugu kosam, aidu nokkandi.
+    </Say>
   </Gather>
-  <Say voice="Polly.Joanna-Neural" language="en-US">
-    We did not hear anything. Thank you for calling. Goodbye.
+  <Say language="en-US">
+    We did not receive any input. Goodbye.
   </Say>
+  <Hangup/>
 </Response>`;
 
     return new NextResponse(twiml, {

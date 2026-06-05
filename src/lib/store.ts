@@ -144,18 +144,92 @@ export const useDistributorStore = create<DistributorState>((set) => ({
 
 // ---------- Dashboard Store ----------
 
-interface DashboardState {
-  stats: DashboardStats | null;
-  isLoading: boolean;
-  setStats: (stats: DashboardStats) => void;
-  setLoading: (loading: boolean) => void;
-  fetchStats: () => Promise<void>;
+export interface Notification {
+  id: string;
+  call_id: string;
+  title: string;
+  message: string;
+  call_group: string;
+  urgent_flag: boolean;
+  is_read: boolean;
+  created_at: string;
 }
 
-export const useDashboardStore = create<DashboardState>((set) => ({
+export interface CallAnalysis {
+  id: string;
+  call_id: string;
+  issue_type: string;
+  customer_id: string | null;
+  order_id: string | null;
+  sentiment_score: number;
+  resolution_status: string;
+  call_group: string | null;
+  summary_note: string | null;
+  updated_at: string;
+}
+
+interface DashboardState {
+  stats: DashboardStats | null;
+  notifications: Notification[];
+  callAnalyses: CallAnalysis[];
+  isLoading: boolean;
+  setStats: (stats: DashboardStats) => void;
+  setNotifications: (notifications: Notification[]) => void;
+  setCallAnalyses: (analyses: CallAnalysis[]) => void;
+  addNotification: (notification: Notification) => void;
+  addCallAnalysis: (analysis: CallAnalysis) => void;
+  markAsRead: (id: string) => void;
+  markAllAsRead: () => Promise<void>;
+  setLoading: (loading: boolean) => void;
+  fetchStats: () => Promise<void>;
+  fetchNotifications: () => Promise<void>;
+  fetchCallAnalyses: () => Promise<void>;
+}
+
+export const useDashboardStore = create<DashboardState>((set, get) => ({
   stats: null,
+  notifications: [],
+  callAnalyses: [],
   isLoading: false,
   setStats: (stats) => set({ stats }),
+  setNotifications: (notifications) => set({ notifications }),
+  setCallAnalyses: (analyses) => set({ callAnalyses: analyses }),
+  addNotification: (notification) =>
+    set((state) => ({ notifications: [notification, ...state.notifications] })),
+  addCallAnalysis: (analysis) =>
+    set((state) => ({ callAnalyses: [analysis, ...state.callAnalyses] })),
+  markAsRead: async (id) => {
+    // Optimistic update
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.id === id ? { ...n, is_read: true } : n
+      ),
+    }));
+
+    try {
+      await fetch("/api/dashboard/notifications", {
+        method: "PATCH",
+        body: JSON.stringify({ id, is_read: true }),
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      console.error("Failed to mark notification as read:", error);
+    }
+  },
+  markAllAsRead: async () => {
+    // Optimistic update
+    set((state) => ({
+      notifications: state.notifications.map((n) => ({ ...n, is_read: true })),
+    }));
+
+    try {
+      await fetch("/api/dashboard/notifications/mark-all-read", {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error("Failed to mark all notifications as read:", error);
+    }
+  },
   setLoading: (isLoading) => set({ isLoading }),
   fetchStats: async () => {
     set({ isLoading: true });
@@ -169,6 +243,28 @@ export const useDashboardStore = create<DashboardState>((set) => ({
       console.error("Failed to fetch dashboard stats:", error);
     } finally {
       set({ isLoading: false });
+    }
+  },
+  fetchNotifications: async () => {
+    try {
+      const res = await fetch("/api/dashboard/notifications");
+      const json: ApiResponse<Notification[]> = await res.json();
+      if (json.success && json.data) {
+        set({ notifications: json.data });
+      }
+    } catch (error) {
+      console.error("Failed to fetch notifications:", error);
+    }
+  },
+  fetchCallAnalyses: async () => {
+    try {
+      const res = await fetch("/api/dashboard/analysis");
+      const json: ApiResponse<CallAnalysis[]> = await res.json();
+      if (json.success && json.data) {
+        set({ callAnalyses: json.data });
+      }
+    } catch (error) {
+      console.error("Failed to fetch call analyses:", error);
     }
   },
 }));

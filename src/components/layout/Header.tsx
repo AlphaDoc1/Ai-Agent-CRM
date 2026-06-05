@@ -2,6 +2,7 @@
 
 import { Bell, Search } from "lucide-react";
 import { useState } from "react";
+import NotificationCenter from "../notifications/NotificationCenter";
 
 export default function Header() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -46,33 +47,7 @@ export default function Header() {
       {/* Right side */}
       <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
         {/* Notifications */}
-        <button
-          className="btn-ghost"
-          style={{
-            width: "40px",
-            height: "40px",
-            borderRadius: "10px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          <Bell size={18} />
-          <span
-            style={{
-              position: "absolute",
-              top: "6px",
-              right: "6px",
-              width: "8px",
-              height: "8px",
-              borderRadius: "50%",
-              background: "var(--accent-red)",
-            }}
-          />
-        </button>
+        <NotificationCenter />
 
         {/* User avatar */}
         <div

@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { extractCallMetadata } from "@/lib/ai-agent";
+import { processPostCall } from "@/lib/post-call-pipeline";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
@@ -32,11 +33,11 @@ export async function POST(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // 1. Locate the active call log using CallSid suffix (since Twilio recording webhook might not send From)
+    // 1. Locate the active call log using CallSid
     const { data: callLog, error: fetchError } = await supabase
       .from("call_logs")
       .select("*")
-      .like("caller_phone", `%_${callSid}`)
+      .eq("call_sid", callSid)
       .eq("status", "in_progress")
       .order("created_at", { ascending: false })
       .limit(1)
@@ -192,6 +193,11 @@ export async function POST(request: NextRequest) {
 
       if (updateError) {
         console.error("[Telephony] Failed to finalize call log record:", updateError);
+      } else {
+        // Trigger post-call pipeline (non-blocking)
+        processPostCall(callLog.id).catch(err => {
+          console.error(`[Telephony] Post-call pipeline failed for call ${callLog.id}:`, err);
+        });
       }
     }
 

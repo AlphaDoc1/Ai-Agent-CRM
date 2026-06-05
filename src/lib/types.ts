@@ -17,20 +17,14 @@ export interface User {
 }
 
 export interface Distributor {
-  id: string;
+  distributor_id: string;
   name: string;
+  region: string;
   state: string;
-  region: string | null;
-  city: string | null;
-  phone: string;
-  email: string;
-  address: string | null;
-  is_active: boolean;
-  total_leads_assigned: number;
-  total_conversions: number;
-  user_id: string | null;
-  created_at: string;
-  updated_at: string;
+  city: string;
+  phone: string | null;
+  email: string | null;
+  product_categories: string | null;
 }
 
 export type InquiryStatus =
@@ -113,6 +107,57 @@ export interface CallLog {
   created_at: string;
 }
 
+export interface Product {
+  product_id: string;
+  model_number: string;
+  name: string;
+  category_id: string;
+  capacity: string | null;
+  temperature_range: string | null;
+  dimensions_mm: string | null;
+  power_watts: string | null;
+  refrigerant: string | null;
+  material: string | null;
+  key_features: string | null;
+  stock_status: 'In Stock' | 'Out of Stock' | 'Made to Order';
+}
+
+export interface Customer {
+  customer_id: string;
+  name: string;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  business_type: 'Hospitality' | 'Healthcare' | 'QSR' | 'Retail' | 'Pharma' | 'Industrial' | 'Other';
+  city: string | null;
+  state: string | null;
+  account_created_date: string;
+}
+
+export interface Order {
+  order_id: string;
+  customer_id: string;
+  product_id: string;
+  order_date: string;
+  quantity: number;
+  delivery_status: 'Delivered' | 'In Transit' | 'Processing' | 'Cancelled';
+  installation_status: 'Pending' | 'Scheduled' | 'Completed' | 'Not Required' | null;
+  warranty_expiry: string | null;
+}
+
+export interface ServiceTicket {
+  ticket_id: string;
+  order_id: string | null;
+  customer_id: string;
+  product_id: string | null;
+  issue_type: 'AMC' | 'Warranty_Claim' | 'Installation' | 'Spare_Parts' | 'Repair' | 'Complaint' | 'General';
+  description: string;
+  status: 'Open' | 'In Progress' | 'Resolved' | 'Escalated';
+  priority: 'Low' | 'Medium' | 'High' | 'Critical';
+  created_at: string;
+  resolved_at: string | null;
+}
+
 // ---------- AI Response Types ----------
 
 export interface AIAnalysisResponse {
@@ -167,10 +212,12 @@ export interface DashboardStats {
   convertedLeads: number;
   totalDistributors: number;
   activeDistributors: number;
+  urgentIssuesCount: number;
   leadsByStatus: { status: string; count: number }[];
   leadsByPriority: { priority: string; count: number }[];
   leadsTrend: { date: string; count: number }[];
   topDistributors: { name: string; leads: number; conversions: number }[];
+  recentAnalyses: CallAnalysis[];
 }
 
 export interface ApiResponse<T = unknown> {

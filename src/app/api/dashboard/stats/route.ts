@@ -22,6 +22,8 @@ export async function GET() {
       priorityCountsRes,
       recentLeadsRes,
       topDistributorsRes,
+      urgentIssuesRes,
+      recentAnalysesRes,
     ] = await Promise.all([
       supabase.from("inquiries").select("id", { count: "exact", head: true }),
       supabase
@@ -62,6 +64,17 @@ export async function GET() {
         .select("name, total_leads_assigned, total_conversions")
         .eq("is_active", true)
         .order("total_leads_assigned", { ascending: false })
+        .limit(5),
+      // Urgent issues from call analysis
+      supabase
+        .from("call_analysis")
+        .select("id", { count: "exact", head: true })
+        .eq("urgent_flag", true),
+      // Recent call analyses
+      supabase
+        .from("call_analysis")
+        .select("*")
+        .order("updated_at", { ascending: false })
         .limit(5),
     ]);
 
@@ -117,10 +130,12 @@ export async function GET() {
       convertedLeads: convertedLeadsRes.count || 0,
       totalDistributors: totalDistributorsRes.count || 0,
       activeDistributors: activeDistributorsRes.count || 0,
+      urgentIssuesCount: urgentIssuesRes.count || 0,
       leadsByStatus,
       leadsByPriority,
       leadsTrend,
       topDistributors,
+      recentAnalyses: recentAnalysesRes.data || [],
     };
 
     return NextResponse.json({

@@ -10,7 +10,7 @@ const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 const MODEL = "llama3";
 const MAX_RETRIES = 3;
 const DB_TIMEOUT_MS = 5000;
-const COMPANY_NAME = "ShopEasy";
+const COMPANY_NAME = "Elanpro";
 
 // ============================================
 // LLM CALL LAYER
@@ -329,31 +329,44 @@ interface ExtractedState {
   lastAgentMessage: string;
 }
 
-function extractConversationState(history: string[], userMessage: string): ExtractedState {
+async function extractConversationState(history: string[], userMessage: string, languageName: string = "English"): Promise<ExtractedState> {
   const customerName = extractCustomerNameFromHistory(history);
 
-  let orderId: string | null = null;
-  for (const line of [...history, `User: ${userMessage}`]) {
-    const match = line.match(/ORD\d{4,}/i);
-    if (match) {
-      orderId = match[0].toUpperCase();
-    }
-  }
+  // We'll use LLM to extract entities more reliably from noisy multilingual speech
+  const extractionPrompt = `Extract entities from the following conversation.
+CONVERSATION:
+${history.join("\n")}
+User: ${userMessage}
 
-  let email: string | null = null;
-  for (const line of [...history, `User: ${userMessage}`]) {
-    const match = line.match(/[\w.-]+@[\w.-]+\.\w+/);
-    if (match) {
-      email = match[0].toLowerCase();
-    }
-  }
+INSTRUCTIONS:
+1. Extract Order ID: Look for patterns like ORD followed by numbers (e.g., ORD001, ORD007). Handle misspellings or phonetic variations like "ऑडी", "आर्ड", "voter ID", "ऑर्डनेंस". If the user just says a number like "007" in an order context, extract it as "ORD007".
+2. Extract Email.
+3. Extract Customer ID: Look for CID followed by numbers (e.g., CID001).
 
-  let customerId: string | null = null;
-  for (const line of [...history, `User: ${userMessage}`]) {
-    const match = line.match(/CID\d{3,}/i);
-    if (match) {
-      customerId = match[0].toUpperCase();
+Respond with ONLY a JSON object:
+{
+  "orderId": "ORDxxx or null",
+  "email": "email or null",
+  "customerId": "CIDxxx or null"
+}`;
+
+  let extracted = { orderId: null, email: null, customerId: null };
+  try {
+    const raw = await callLLM(extractionPrompt, true);
+    const cleaned = raw.trim().replace(/```json\s*/gi, "").replace(/```\s*/g, "");
+    extracted = JSON.parse(cleaned);
+  } catch (e) {
+    console.error("[AI Agent] Entity extraction failed, falling back to regex:", e);
+    // Fallback to regex
+    let orderId: string | null = null;
+    for (const line of [...history, `User: ${userMessage}`]) {
+      const match = line.match(/ORD\d{1,}/i) || line.match(/\b\d{3,}\b/);
+      if (match) {
+        orderId = match[0].toUpperCase();
+        if (!orderId.startsWith("ORD")) orderId = "ORD" + orderId.padStart(3, '0');
+      }
     }
+    extracted.orderId = orderId as any;
   }
 
   let lastAgentMessage = "";
@@ -366,9 +379,9 @@ function extractConversationState(history: string[], userMessage: string): Extra
 
   return {
     customerName,
-    orderId,
-    email,
-    customerId,
+    orderId: extracted.orderId,
+    email: extracted.email,
+    customerId: extracted.customerId,
     lastAgentMessage
   };
 }
@@ -377,16 +390,16 @@ function extractConversationState(history: string[], userMessage: string): Extra
 // DATABASE LOOKUP HELPERS (with timeout — FIX 7)
 // ============================================
 
-async function fetchOrderDetails(orderId: string) {
+async function fetchOrderDetails(order_id: string) {
   const supabase = createAdminClient();
   const query = supabase
     .from("orders")
     .select(`
-      order_id, order_date, delivery_status, issue_flag,
-      customers ( customer_id, name, phone, email ),
-      products ( product_id, name, category, price )
+      order_id, order_date, delivery_status, installation_status, warranty_expiry,
+      customers ( customer_id, name, contact_person, phone, email, business_type, city, state ),
+      products ( product_id, model_number, name, capacity, temperature_range )
     `)
-    .eq("order_id", orderId)
+    .eq("order_id", order_id)
     .maybeSingle();
 
   const { data, error } = await withTimeout<any>(query, DB_TIMEOUT_MS);
@@ -398,12 +411,12 @@ async function fetchOrderDetails(orderId: string) {
   return data;
 }
 
-async function fetchSupportTicketsForOrder(orderId: string) {
+async function fetchSupportTicketsForOrder(order_id: string) {
   const supabase = createAdminClient();
   const query = supabase
-    .from("support_tickets")
+    .from("service_tickets")
     .select("*")
-    .eq("order_id", orderId);
+    .eq("order_id", order_id);
 
   const { data, error } = await withTimeout<any>(query, DB_TIMEOUT_MS);
 
@@ -431,12 +444,12 @@ async function fetchCustomerByEmail(email: string) {
   return data;
 }
 
-async function fetchCustomerById(customerId: string) {
+async function fetchCustomerById(customer_id: string) {
   const supabase = createAdminClient();
   const query = supabase
     .from("customers")
     .select("*")
-    .eq("customer_id", customerId)
+    .eq("customer_id", customer_id)
     .maybeSingle();
 
   const { data, error } = await withTimeout<any>(query, DB_TIMEOUT_MS);
@@ -448,15 +461,15 @@ async function fetchCustomerById(customerId: string) {
   return data;
 }
 
-async function fetchCustomerOrders(customerId: string) {
+async function fetchCustomerOrders(customer_id: string) {
   const supabase = createAdminClient();
   const query = supabase
     .from("orders")
     .select(`
-      order_id, order_date, delivery_status, issue_flag,
-      products ( product_id, name, category, price )
+      order_id, order_date, delivery_status, installation_status, warranty_expiry,
+      products ( product_id, model_number, name, capacity )
     `)
-    .eq("customer_id", customerId)
+    .eq("customer_id", customer_id)
     .order("order_date", { ascending: false });
 
   const { data, error } = await withTimeout<any>(query, DB_TIMEOUT_MS);
@@ -468,17 +481,43 @@ async function fetchCustomerOrders(customerId: string) {
   return data || [];
 }
 
-async function fetchAllProducts() {
+async function fetchProductsByQuery(userMessage: string) {
   const supabase = createAdminClient();
+  
+  // Improvement: Map common phonetic/translated terms to technical keywords
+  const queryTerms = userMessage.toLowerCase();
+  let searchTerms = [queryTerms];
+  
+  if (queryTerms.includes("की मेकर") || queryTerms.includes("बर्फ") || queryTerms.includes("ice maker")) {
+    searchTerms.push("Ice Maker", "Ice Machine");
+  }
+  if (queryTerms.includes("चिलर") || queryTerms.includes("chiller")) {
+    searchTerms.push("Chiller", "Cooler");
+  }
+  if (queryTerms.includes("फ्रीजर") || queryTerms.includes("freezer")) {
+    searchTerms.push("Freezer");
+  }
+
   const query = supabase
     .from("products")
-    .select("*")
-    .order("product_id");
+    .select(`
+      product_id, model_number, name, capacity, temperature_range, 
+      dimensions_mm, power_watts, refrigerant, material, key_features, stock_status,
+      product_categories ( name, applications )
+    `)
+    .limit(10);
+
+  // Build the OR filter for keywords
+  const keywords = searchTerms.join(" ").split(/\s+/).filter(w => w.length > 2);
+  if (keywords.length > 0) {
+    const filter = keywords.map(k => `name.ilike.%${k}%,model_number.ilike.%${k}%,key_features.ilike.%${k}%`).join(",");
+    query.or(filter);
+  }
 
   const { data, error } = await withTimeout<any>(query, DB_TIMEOUT_MS);
 
   if (error) {
-    console.error("[fetchAllProducts] Error:", error.message);
+    console.error("[fetchProductsByQuery] Error:", error.message);
     return [];
   }
   return data || [];
@@ -497,49 +536,38 @@ const ISSUE_KEYWORDS = [
 ];
 
 /**
- * Check if a user message is an ending/goodbye message.
- * Returns false if the message contains active issue keywords or is longer than 6 words.
+ * Check if a user message is an ending/goodbye message (SIGNAL 1 & 2).
  * Returns true only for short confirmations/goodbyes without issue content.
  */
 function checkIsEndingMessage(message: string): boolean {
   const normalized = message.trim().replace(/[.,!?]/g, "").toLowerCase();
   const words = normalized.split(/\s+/).filter(Boolean);
 
-  // Long messages are never ending messages
-  if (words.length > 6) {
-    return false;
-  }
-
-  // Check for active issue keywords — if present, this is NOT an ending
-  for (const keyword of ISSUE_KEYWORDS) {
-    if (normalized.includes(keyword)) {
-      return false;
-    }
-  }
-
-  // Check for explicit goodbye phrases
+  // SIGNAL 1: EXPLICIT GOODBYE
   const explicitGoodbyes = [
-    "thank you", "bye", "ok thanks", "that's all", "nothing else",
-    "no that's it", "ok got it", "ok i'm good", "ok im good", "done",
-    "thank you bye", "goodbye", "bye bye", "ok bye", "thanks bye",
-    "no thanks", "no thank you", "i'm good", "im good", "that is all",
-    "nothing more", "all good", "no more"
+    "thank you", "bye", "ok thanks", "that's all", "nothing else", 
+    "no that's it", "ok got it", "ok i'm good", "done", "goodbye",
+    "dhanyawad", "shukriya", "bas", "kuch nahi", "theek hai", "ok bye", // Hindi
+    "dhanyavadagalu", "saaku", "innenu illa", // Kannada
+    "nandri", "podhum", // Tamil
+    "dhanyavadalu", "chalu", "inkem ledu" // Telugu
   ];
-  if (explicitGoodbyes.includes(normalized)) {
-    return true;
+  
+  for (const goodbye of explicitGoodbyes) {
+    if (normalized === goodbye || normalized.includes(goodbye)) return true;
   }
 
-  // Check for short positive/negative confirmations (only after "anything else?" question)
+  // SIGNAL 2/3: Short confirmations after resolution
   const shortConfirmations = [
-    "no", "nope", "nothing", "ok", "okay", "fine", "perfect",
-    "got it", "sure", "alright", "understood", "great", "yes", "yep"
+    "no", "nope", "nothing", "ok", "okay", "fine", "perfect", "got it", 
+    "sure", "alright", "understood", "great", "yes", "yep",
+    "nahi", "ha", "theek", "bas", // Hindi
+    "illa", "houdhu", "sari", // Kannada
+    "illai", "aamaam", "sari", // Tamil
+    "ledu", "avunu", "sari" // Telugu
   ];
-  if (shortConfirmations.includes(normalized)) {
-    return true;
-  }
-
-  // Check for goodbye keywords in the message
-  if (/\b(goodbye|bye bye|nothing else|thank you|thanks)\b/i.test(message)) {
+  
+  if (words.length <= 2 && shortConfirmations.includes(normalized)) {
     return true;
   }
 
@@ -556,35 +584,29 @@ function checkIsEndingMessage(message: string): boolean {
  */
 function detectTopicSwitch(userMessage: string, lastAgentMessage: string): string | null {
   const msg = userMessage.toLowerCase();
-  const isAwaitingOrderId = lastAgentMessage.includes("share your Order ID") || lastAgentMessage.includes("valid Order ID");
-  const isAwaitingEmail = lastAgentMessage.includes("registered email address") || lastAgentMessage.includes("verify your registered email");
+  
+  // Detection for multilingual keywords
+  const orderKeywords = /\b(order|damaged|wrong item|broken|delivery|shipped|not received|package|ticket|service|repair|complaint|ऑर्डर|डिलीवरी|मैसेज|टिकट|सर्विस|शिकायत|खराब)\b/i;
+  const productKeywords = /\b(product|price|stock|available|buy|purchase|details|specs|उत्पाद|कीमत|चिलर|फ्रीजर|मशीन)\b/i;
+  const accountKeywords = /\b(login|password|account|profile|sign in|reset|details|खाता|पासवर्ड|प्रोफाइल)\b/i;
+  const paymentKeywords = /\b(refund|charge|payment|double charge|money back|भुगतान|रिफंड|पैसे)\b/i;
+
+  const isAwaitingOrderId = /order id|ord|ऑर्डर आईडी|आईडी/i.test(lastAgentMessage);
+  const isAwaitingEmail = /email|address|customer id|ईमेल|पता|आईडी/i.test(lastAgentMessage);
 
   if (!isAwaitingOrderId && !isAwaitingEmail) {
-    return null; // Not in a data-collection state, no switch possible
+    return null;
   }
 
-  // Check if the user is describing a new issue instead of providing the requested data
   if (isAwaitingEmail) {
-    // Was collecting email/account info, but user mentions order-related keywords
-    if (/\b(order|damaged|wrong item|broken|delivery|shipped|not received|package)\b/i.test(msg)) {
-      return "ORDER_ISSUE";
-    }
-    if (/\b(product|price|stock|available|buy|purchase)\b/i.test(msg)) {
-      return "PRODUCT_QUERY";
-    }
+    if (orderKeywords.test(msg)) return "ORDER_ISSUE";
+    if (productKeywords.test(msg)) return "PRODUCT_QUERY";
   }
 
   if (isAwaitingOrderId) {
-    // Was collecting order ID, but user mentions account/payment keywords
-    if (/\b(login|password|account|profile|sign in|reset)\b/i.test(msg)) {
-      return "ACCOUNT_ISSUE";
-    }
-    if (/\b(refund|charge|payment|double charge|money back)\b/i.test(msg)) {
-      return "PAYMENT_ISSUE";
-    }
-    if (/\b(product|price|stock|available|buy|purchase)\b/i.test(msg)) {
-      return "PRODUCT_QUERY";
-    }
+    if (accountKeywords.test(msg)) return "ACCOUNT_ISSUE";
+    if (paymentKeywords.test(msg)) return "PAYMENT_ISSUE";
+    if (productKeywords.test(msg)) return "PRODUCT_QUERY";
   }
 
   return null;
@@ -757,52 +779,42 @@ async function upsertCallAnalysis(
  * Generate a real ticket ID from the database sequence and insert into support_tickets (FIX 3).
  */
 async function generateTicketFromDB(
-  orderId: string | null,
-  customerId: string | null,
-  issueType: string,
+  order_id: string | null,
+  customer_id: string | null,
+  issue_type: string,
   description: string
 ): Promise<string> {
   try {
     const supabase = createAdminClient();
 
-    // Get next sequence value
-    const { data: seqData, error: seqError } = await supabase
-      .rpc("nextval_support_ticket_seq");
+    // Get next ticket ID via RPC
+    const { data: ticketId, error: seqError } = await supabase
+      .rpc("next_service_ticket_id");
 
-    let ticketNum: number;
-    if (seqError || !seqData) {
-      // Fallback: query existing tickets and use max + 1
-      console.warn("[AI Agent] Sequence RPC failed, using fallback:", seqError);
-      const { data: maxTicket } = await supabase
-        .from("support_tickets")
-        .select("ticket_id")
-        .order("ticket_id", { ascending: false })
-        .limit(1)
-        .single();
-      const match = maxTicket?.ticket_id?.match(/\d+/);
-      ticketNum = match ? parseInt(match[0]) + 1 : 3000;
+    let finalTicketId: string;
+    if (seqError || !ticketId) {
+      console.warn("[AI Agent] next_service_ticket_id RPC failed, using fallback:", seqError);
+      finalTicketId = `TKT${Math.floor(5000 + Math.random() * 5000)}`;
     } else {
-      ticketNum = typeof seqData === "number" ? seqData : 3000;
+      finalTicketId = ticketId;
     }
 
-    const ticketId = `TKT${ticketNum}`;
-
-    // Insert into support_tickets
-    await supabase.from("support_tickets").insert({
-      ticket_id: ticketId,
-      order_id: orderId,
-      customer_id: customerId,
-      issue_type: issueType,
+    // Insert into service_tickets
+    await supabase.from("service_tickets").insert({
+      ticket_id: finalTicketId,
+      order_id: order_id,
+      customer_id: customer_id,
+      issue_type: "Complaint", // Default to Complaint for auto-generated
       description: description,
       status: "Open",
+      priority: "Medium"
     });
 
-    console.log(`[AI Agent] Created support ticket: ${ticketId}`);
-    return ticketId;
+    console.log(`[AI Agent] Created service ticket: ${finalTicketId}`);
+    return finalTicketId;
   } catch (err) {
     console.error("[AI Agent] Failed to generate ticket from DB:", err);
-    // Absolute fallback: random ID
-    return `TKT${Math.floor(3000 + Math.random() * 7000)}`;
+    return `TKT${Math.floor(5000 + Math.random() * 5000)}`;
   }
 }
 
@@ -873,10 +885,27 @@ export async function generateVoiceResponse(
   let sentimentScore = computeSentiment(userMessage);
 
   try {
+    const supabase = createAdminClient();
+    const { data: callLog } = await supabase
+      .from("call_logs")
+      .select("preferred_language")
+      .eq("id", callLogId)
+      .maybeSingle();
+    
+    const preferredLang = callLog?.preferred_language || "en-US";
+    const languageMap: Record<string, string> = {
+      "en-US": "English",
+      "hi-IN": "Hindi",
+      "kn-IN": "Kannada",
+      "ta-IN": "Tamil",
+      "te-IN": "Telugu"
+    };
+    const languageName = languageMap[preferredLang] || "English";
+
     const fullConversation = buildFullConversation(userMessage, conversationHistory);
     
     // 1. Extract existing entities from history
-    const state = extractConversationState(conversationHistory, userMessage);
+    const state = await extractConversationState(conversationHistory, userMessage, languageName);
     let customerName = state.customerName;
     if (!customerName && callerName && 
         !callerName.includes("Phone Call") && 
@@ -910,16 +939,25 @@ export async function generateVoiceResponse(
     if (!customerName) {
       // If we haven't greeted yet (first user turn)
       if (conversationHistory.length === 0) {
-        const reply = `Hello! Welcome to ${COMPANY_NAME} support. How are you doing today?`;
+        const greetingPrompt = `You are a polite AI assistant for ${COMPANY_NAME} support. 
+Greet the customer and ask how they are doing today.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(greetingPrompt, false);
+        
         await writeAgentTurn(callLogId, userMessage, reply, null, {
           sentiment_score: sentimentScore,
           resolution_status: "ACTIVE",
         });
         return buildResponse(reply, "ACTIVE", { sentiment_score: sentimentScore, customer_name: null });
       }
-      // If we greeted, but haven't asked for name yet (last agent message was the greeting)
+      // If we greeted, but haven't asked for name yet
       if (lastAgentMessage.includes("How are you doing today?") || lastAgentMessage.includes("How can I assist you") || lastAgentMessage.includes("How can I help you today")) {
-        const reply = `Great! May I know your name please?`;
+        const namePrompt = `Ask the customer for their name politely.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 1 sentence. Example: "May I know your name please?" in ${languageName}.`;
+        const reply = await callLLM(namePrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, null, {
           sentiment_score: sentimentScore,
           resolution_status: "ACTIVE",
@@ -927,7 +965,11 @@ export async function generateVoiceResponse(
         return buildResponse(reply, "ACTIVE", { sentiment_score: sentimentScore, customer_name: null });
       }
       // Otherwise, we must ask for name
-      const reply = `Great! May I know your name please?`;
+      const namePrompt = `Ask the customer for their name politely.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 1 sentence.`;
+      const reply = await callLLM(namePrompt, false);
+
       await writeAgentTurn(callLogId, userMessage, reply, null, {
         sentiment_score: sentimentScore,
         resolution_status: "ACTIVE",
@@ -939,29 +981,23 @@ export async function generateVoiceResponse(
 
     // 4. SIGNAL checks for CALL TERMINATION
     
-    // Signal 5: Customer Frustration
-    if (
-      /\b(useless|human|real agent|manager|abusive|angry|annoyed|terrible|worst)\b/i.test(userMessage) || 
-      /connect me to/i.test(userMessage) || 
-      /want to talk to a person/i.test(userMessage)
-    ) {
-      responseStatus = "ESCALATED";
-      sentimentScore = 0.10;
-      const reply = `I completely understand your frustration, ${customerName}. Let me connect you to a human agent right away.`;
-      await writeAgentTurn(callLogId, userMessage, reply, customerName, {
-        sentiment_score: sentimentScore,
-        resolution_status: "ESCALATED",
-      });
-      return buildResponse(reply, "ESCALATED", {
-        sentiment_score: sentimentScore,
-        customer_name: customerName,
-      });
-    }
+    // SIGNAL 1, 2, 3 Detection: Goodbye or Resolution Confirmation
+    const wasClosingQuestion = lastAgentMessage.includes("Is there anything else I can help you with") || 
+                               lastAgentMessage.includes("Is there anything else before I go") ||
+                               lastAgentMessage.includes("क्या आपके पास और कोई समस्या है") ||
+                               lastAgentMessage.includes("innenu illa");
+    
+    const isEndingSignal = checkIsEndingMessage(userMessage);
 
-    // Response to Escalation Question (Signal 4 response)
-    if (lastAgentMessage.includes("escalating this to our support team") && lastAgentMessage.includes("Is there anything else before I go?")) {
+    if (isEndingSignal || (wasClosingQuestion && !userMessage.trim())) {
       responseStatus = "ENDED";
-      const reply = `Thank you for calling ${COMPANY_NAME} support, ${customerName}. I hope your issue has been resolved. Have a great day! Goodbye!`;
+      const goodbyePrompt = `The customer "${customerName}" indicated they want to end the call (SIGNAL 1 or 2).
+Write EXACTLY the following message in ${languageName} (use native script):
+"Thank you for calling Elanpro support, ${customerName}. I hope your issue has been resolved. Have a great day! Goodbye!"
+Keep it under 3 sentences.`;
+      
+      const reply = await callLLM(goodbyePrompt, false);
+
       await writeAgentTurn(callLogId, userMessage, reply, customerName, {
         sentiment_score: sentimentScore,
         resolution_status: "ENDED",
@@ -972,13 +1008,38 @@ export async function generateVoiceResponse(
       });
     }
 
-    // Signal 1, 2, 3: Goodbye Check (using smart check — FIX ending bug)
-    const wasClosingQuestion = lastAgentMessage.includes("Is there anything else I can help you with");
-    const isEnding = checkIsEndingMessage(userMessage);
+    // Signal 5: Customer Frustration
+    if (
+      /\b(useless|human|real agent|manager|abusive|angry|annoyed|terrible|worst|बेकार|इंसान|मैनेजर|गुस्सा)\b/i.test(userMessage) || 
+      /connect me to/i.test(userMessage) || 
+      /want to talk to a person/i.test(userMessage)
+    ) {
+      responseStatus = "ESCALATED";
+      sentimentScore = 0.10;
+      const escalatePrompt = `The customer "${customerName}" is frustrated and wants a human (SIGNAL 5).
+1. Respond in ${languageName} (native script): "I completely understand your frustration, ${customerName}. Let me connect you to a human agent right away."
+2. Then follow with the EXACT goodbye in ${languageName}: "Thank you for calling Elanpro support, ${customerName}. I hope your issue has been resolved. Have a great day! Goodbye!"
+Combine into one response under 4 sentences.`;
+      const reply = await callLLM(escalatePrompt, false);
 
-    if (isEnding || (wasClosingQuestion && !userMessage.trim())) {
+      await writeAgentTurn(callLogId, userMessage, reply, customerName, {
+        sentiment_score: sentimentScore,
+        resolution_status: "ESCALATED",
+      });
+      return buildResponse(reply, "ESCALATED", {
+        sentiment_score: sentimentScore,
+        customer_name: customerName,
+      });
+    }
+
+    // SIGNAL 4: Response to Escalation Question (Unresolvable Issue)
+    if (lastAgentMessage.includes("escalating this to our support team") && wasClosingQuestion) {
       responseStatus = "ENDED";
-      const reply = `Thank you for calling ${COMPANY_NAME} support, ${customerName}. I hope your issue has been resolved. Have a great day! Goodbye!`;
+      const goodbyePrompt = `The customer "${customerName}" responded to an escalation notice (SIGNAL 4).
+Write EXACTLY the following message in ${languageName} (use native script):
+"Thank you for calling Elanpro support, ${customerName}. I hope your issue has been resolved. Have a great day! Goodbye!"`;
+      const reply = await callLLM(goodbyePrompt, false);
+
       await writeAgentTurn(callLogId, userMessage, reply, customerName, {
         sentiment_score: sentimentScore,
         resolution_status: "ENDED",
@@ -1003,7 +1064,12 @@ export async function generateVoiceResponse(
       detectedIssueType = topicSwitch;
 
       if (topicSwitch === "ORDER_ISSUE") {
-        const reply = `I understand, ${customerName}. Let me help you with your order issue. Could you please share your Order ID so I can look into this for you? It usually starts with 'ORD' followed by numbers.`;
+        const orderPrompt = `The customer "${customerName}" wants to discuss an order issue. 
+Politely ask them to share their Order ID (starts with 'ORD').
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(orderPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: topicSwitch,
           sentiment_score: sentimentScore,
@@ -1017,7 +1083,12 @@ export async function generateVoiceResponse(
       }
 
       if (topicSwitch === "ACCOUNT_ISSUE" || topicSwitch === "PAYMENT_ISSUE") {
-        const reply = `I'd be happy to help you with that, ${customerName}. Could you please share your registered email address or Customer ID so I can pull up your account?`;
+        const accountPrompt = `The customer "${customerName}" has an account or payment issue. 
+Politely ask them for their registered email address or Customer ID.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(accountPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: topicSwitch,
           sentiment_score: sentimentScore,
@@ -1034,27 +1105,28 @@ export async function generateVoiceResponse(
         // Fetch products and answer
         let products;
         try {
-          products = await fetchAllProducts();
+          products = await fetchProductsByQuery(userMessage);
         } catch (err) {
           if (String(err).includes("DB_TIMEOUT")) {
             dbTimeout = true;
           }
           products = [];
         }
-        const productContext = products.length > 0 ? JSON.stringify(products, null, 2) : "No products in database.";
-        const prompt = `You are a helpful e-commerce support agent named "AI Agent" for ${COMPANY_NAME}.
-The customer's name is "${customerName}". Always address them by name.
+        const productContext = products.length > 0 ? JSON.stringify(products, null, 2) : "No products found matching your query.";
+        const prompt = `You are a professional expert sales agent for Elanpro (Commercial Refrigeration). 
+STRICT INSTRUCTIONS:
+1. Use ONLY the product data provided below. Do not use external knowledge.
+2. The customer's name is "${customerName}". Address them by name.
+3. The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi). Do NOT use Romanized script.
+4. Mention technical specs (Model, Capacity, Temp Range).
+5. DO NOT mention prices.
+6. Keep it under 4 sentences.
+7. CRITICAL: Always end your response by asking if they need help with anything else in ${languageName}. Example: "क्या मैं आपकी किसी और चीज़ में मदद कर सकता हूँ?"
 
 PRODUCT DATABASE:
 ${productContext}
 
-Customer query: "${userMessage}"
-
-INSTRUCTIONS:
-- Answer the customer's query using ONLY the product database.
-- Provide specific details (price, stock status, category).
-- Keep response under 3 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+Customer query: "${userMessage}"`;
 
         const response = await callLLM(prompt, false);
         const reply = response.trim();
@@ -1078,7 +1150,12 @@ INSTRUCTIONS:
     // ============================================
     if (lastAgentMessage.includes("May I know your name please?")) {
       // Just got the name, now ask for the issue
-      const reply = `Thank you, ${customerName}! How can I help you today? Please describe your issue.`;
+      const issuePrompt = `The customer just gave their name: "${customerName}". 
+Politely thank them and ask how you can help them today.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+      const reply = await callLLM(issuePrompt, false);
+
       await writeAgentTurn(callLogId, userMessage, reply, customerName, {
         sentiment_score: sentimentScore,
         resolution_status: "ACTIVE",
@@ -1098,8 +1175,13 @@ INSTRUCTIONS:
         if (failures >= 1) {
           const ticketId = await generateTicketFromDB(null, customerId, "order_issue_unresolvable", `Customer ${customerName} could not provide valid Order ID after multiple attempts.`);
           detectedTicketId = ticketId;
-          responseStatus = "ESCALATED";
-          const reply = `I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}. Is there anything else before I go?`;
+          responseStatus = "ACTIVE"; // Keep active to hear the response to "anything else"
+          const escalatePrompt = `Inform "${customerName}" that you are escalating their issue because a valid Order ID was not provided (SIGNAL 4).
+1. Respond in ${languageName} (native script): "I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}."
+2. Then ask in ${languageName}: "Is there anything else before I go?"
+Combine into one response under 3 sentences.`;
+          const reply = await callLLM(escalatePrompt, false);
+
           await writeAgentTurn(callLogId, userMessage, reply, customerName, {
             issue_type: "ORDER_ISSUE",
             sentiment_score: sentimentScore,
@@ -1112,7 +1194,12 @@ INSTRUCTIONS:
             ticket_id: ticketId,
           });
         }
-        const reply = `I couldn't find a valid Order ID in your message, ${customerName}. Could you please check and share it again? It starts with 'ORD' followed by numbers, like 'ORD1001'.`;
+        const retryPrompt = `Inform "${customerName}" that you couldn't find a valid Order ID in their message. 
+Politely ask them to check and share it again (starts with 'ORD').
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(retryPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: "ORDER_ISSUE",
           sentiment_score: sentimentScore,
@@ -1140,15 +1227,20 @@ INSTRUCTIONS:
             // Still failing — escalate
             const ticketId = await generateTicketFromDB(orderId, customerId, "order_issue_db_timeout", `DB timeout looking up order ${orderId} for customer ${customerName}.`);
             detectedTicketId = ticketId;
-            const reply = `I'm sorry, I'm having persistent trouble accessing our systems. I'm escalating this to our support team. Your ticket ID is ${ticketId}. They will contact you within 24 hours. Is there anything else before I go?`;
+            const timeoutPrompt = `Apologize to "${customerName}" that you're having trouble accessing systems (SIGNAL 4).
+1. Respond in ${languageName} (native script): "I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}."
+2. Then ask in ${languageName}: "Is there anything else before I go?"
+Combine into one response under 3 sentences.`;
+            const reply = await callLLM(timeoutPrompt, false);
+
             await writeAgentTurn(callLogId, userMessage, reply, customerName, {
               issue_type: "ORDER_ISSUE",
               order_id: orderId,
               sentiment_score: sentimentScore,
-              resolution_status: "ESCALATED",
+              resolution_status: "ACTIVE", // Keep active to hear response
               db_timeout: true,
             });
-            return buildResponse(reply, "ESCALATED", {
+            return buildResponse(reply, "ACTIVE", {
               issue_type: "ORDER_ISSUE",
               order_id: orderId,
               sentiment_score: sentimentScore,
@@ -1169,15 +1261,20 @@ INSTRUCTIONS:
         if (failures >= 1) {
           const ticketId = await generateTicketFromDB(orderId, customerId, "order_not_found", `Order ${orderId} not found for customer ${customerName} after multiple attempts.`);
           detectedTicketId = ticketId;
-          responseStatus = "ESCALATED";
-          const reply = `I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}. Is there anything else before I go?`;
+          responseStatus = "ACTIVE"; // Hear response
+          const escalatePrompt = `Inform "${customerName}" that order ${orderId} was not found (SIGNAL 4). 
+1. Respond in ${languageName} (native script): "I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}."
+2. Then ask in ${languageName}: "Is there anything else before I go?"
+Combine into one response under 3 sentences.`;
+          const reply = await callLLM(escalatePrompt, false);
+
           await writeAgentTurn(callLogId, userMessage, reply, customerName, {
             issue_type: "ORDER_ISSUE",
             order_id: orderId,
             sentiment_score: sentimentScore,
-            resolution_status: "ESCALATED",
+            resolution_status: "ACTIVE",
           });
-          return buildResponse(reply, "ESCALATED", {
+          return buildResponse(reply, "ACTIVE", {
             issue_type: "ORDER_ISSUE",
             order_id: orderId,
             sentiment_score: sentimentScore,
@@ -1185,7 +1282,12 @@ INSTRUCTIONS:
             ticket_id: ticketId,
           });
         }
-        const reply = `I wasn't able to find order ${orderId} in our system, ${customerName}. Could you please double-check the Order ID and try again?`;
+        const notFoundRetryPrompt = `Inform "${customerName}" that order ${orderId} was not found. 
+Ask them to double-check the Order ID and share it again.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(notFoundRetryPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: "ORDER_ISSUE",
           order_id: orderId,
@@ -1202,24 +1304,24 @@ INSTRUCTIONS:
 
       const tickets = await fetchSupportTicketsForOrder(orderId);
       const orderContext = JSON.stringify(order, null, 2);
-      const ticketContext = tickets.length > 0 ? JSON.stringify(tickets, null, 2) : "No existing support tickets for this order.";
+      const ticketContext = tickets.length > 0 ? JSON.stringify(tickets, null, 2) : "No existing service tickets for this order.";
 
-      const prompt = `You are a polite customer support AI agent named "AI Agent" for ${COMPANY_NAME}.
-The customer's name is "${customerName}". Always address them by name.
+      const prompt = `You are a professional customer support agent for Elanpro (Commercial Refrigeration).
+STRICT INSTRUCTIONS:
+1. Use ONLY the order and ticket data provided below. Do not use external data.
+2. The customer's name is "${customerName}". Address them by name.
+3. The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi). Do NOT use Romanized script.
+4. Provide status for delivery, installation, and warranty.
+5. If there is an existing service ticket, mention its status.
+6. Keep it under 4 sentences.
 
-ORDER DETAILS:
+ORDER DATA:
 ${orderContext}
 
-EXISTING SUPPORT TICKETS:
+SERVICE TICKETS:
 ${ticketContext}
 
-INSTRUCTIONS:
-- Formulate a helpful resolution matching the status:
-  - If delivery_status is "Pending": Inform them the order is processing and mention the order date.
-  - If delivery_status is "Delivered" and issue_flag is "damaged" or "wrong_item": Apologize, refer to existing ticket if open, or offer a solution (replacement/refund).
-  - Mention specific details from the data (like product name, price, dates).
-- Keep it under 4 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+End by asking if there is anything else you can help with in ${languageName}.`;
 
       const response = await callLLM(prompt, false);
       const reply = response.trim();
@@ -1263,15 +1365,20 @@ INSTRUCTIONS:
           } catch {
             const ticketId = await generateTicketFromDB(null, customerId, "account_issue_db_timeout", `DB timeout looking up customer for ${customerName}.`);
             detectedTicketId = ticketId;
-            const reply = `I'm sorry, I'm having persistent trouble accessing our systems. I'm escalating this to our support team. Your ticket ID is ${ticketId}. They will contact you within 24 hours. Is there anything else before I go?`;
+            const timeoutPrompt = `Apologize to "${customerName}" that you're having trouble accessing systems (SIGNAL 4). 
+1. Respond in ${languageName} (native script): "I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}."
+2. Then ask in ${languageName}: "Is there anything else before I go?"
+Combine into one response under 3 sentences.`;
+            const reply = await callLLM(timeoutPrompt, false);
+
             await writeAgentTurn(callLogId, userMessage, reply, customerName, {
               issue_type: "ACCOUNT_ISSUE",
               customer_id: customerId,
               sentiment_score: sentimentScore,
-              resolution_status: "ESCALATED",
+              resolution_status: "ACTIVE", // Hear response
               db_timeout: true,
             });
-            return buildResponse(reply, "ESCALATED", {
+            return buildResponse(reply, "ACTIVE", {
               issue_type: "ACCOUNT_ISSUE",
               customer_id: customerId,
               sentiment_score: sentimentScore,
@@ -1288,21 +1395,31 @@ INSTRUCTIONS:
         if (failures >= 1) {
           const ticketId = await generateTicketFromDB(null, customerId, "account_not_found", `Account not found for customer ${customerName} after multiple attempts.`);
           detectedTicketId = ticketId;
-          responseStatus = "ESCALATED";
-          const reply = `I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}. Is there anything else before I go?`;
+          responseStatus = "ACTIVE"; // Hear response
+          const escalatePrompt = `Inform "${customerName}" that their account was not found (SIGNAL 4). 
+1. Respond in ${languageName} (native script): "I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}."
+2. Then ask in ${languageName}: "Is there anything else before I go?"
+Combine into one response under 3 sentences.`;
+          const reply = await callLLM(escalatePrompt, false);
+
           await writeAgentTurn(callLogId, userMessage, reply, customerName, {
             issue_type: "ACCOUNT_ISSUE",
             sentiment_score: sentimentScore,
-            resolution_status: "ESCALATED",
+            resolution_status: "ACTIVE",
           });
-          return buildResponse(reply, "ESCALATED", {
+          return buildResponse(reply, "ACTIVE", {
             issue_type: "ACCOUNT_ISSUE",
             sentiment_score: sentimentScore,
             customer_name: customerName,
             ticket_id: ticketId,
           });
         }
-        const reply = `I couldn't find an account with that information, ${customerName}. Could you please verify your registered email address or Customer ID?`;
+        const notFoundRetryPrompt = `Inform "${customerName}" that their account information was not found. 
+Politely ask them to verify and share their registered email or Customer ID again.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(notFoundRetryPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: "ACCOUNT_ISSUE",
           sentiment_score: sentimentScore,
@@ -1322,21 +1439,21 @@ INSTRUCTIONS:
       const customerContext = JSON.stringify(customer, null, 2);
       const ordersContext = orders.length > 0 ? JSON.stringify(orders, null, 2) : "No orders found.";
 
-      const prompt = `You are a polite customer support AI agent named "AI Agent" for ${COMPANY_NAME}.
-The customer's name is "${customerName}". Always address them by name.
+      const prompt = `You are a professional customer support agent for Elanpro (Commercial Refrigeration).
+STRICT INSTRUCTIONS:
+1. Use ONLY the customer and order data provided below. Do not use external data.
+2. The customer's name is "${customerName}". Address them by name.
+3. The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi). Do NOT use Romanized script.
+4. Mention their business type and city.
+5. Keep it under 4 sentences.
 
-CUSTOMER RECORD:
+CUSTOMER DATA:
 ${customerContext}
 
-ORDER HISTORY:
+ORDER DATA:
 ${ordersContext}
 
-INSTRUCTIONS:
-- Formulate a helpful resolution.
-- Mention specific details from the customer record or order history (like email, last order ID, product name, status).
-- For refunds (PAYMENT issues), mention it takes 3-5 business days to process.
-- Keep it under 4 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+End by asking if there is anything else you can help with in ${languageName}.`;
 
       const response = await callLLM(prompt, false);
       const reply = response.trim();
@@ -1358,11 +1475,11 @@ INSTRUCTIONS:
     // CLASSIFY THE ISSUE
     // ============================================
     const classifyPrompt = `Classify this customer message into one of these categories:
-- PRODUCT_QUERY (questions about product specifications, price, or availability)
-- ORDER_ISSUE (wrong item, damaged product, late delivery, not received, order status)
-- ACCOUNT_ISSUE (login, password, profile)
-- PAYMENT_ISSUE (refund, double charge, payment failure)
-- OTHER (general conversation, greetings, etc.)
+- PRODUCT_QUERY (questions about product specifications, capacity, technical details, or model information)
+- SERVICE_REQUEST (wants to raise a ticket, repair, service, complaint, installation, or report a problem with a machine they already have)
+- ORDER_ISSUE (order status, late delivery, tracking numbers)
+- ACCOUNT_ISSUE (profile, login, customer details)
+- OTHER (general conversation, greetings, thank you, goodbye)
 
 Message: "${userMessage}"
 
@@ -1375,15 +1492,19 @@ Respond with ONLY the classification string.`;
     if (classification === "PRODUCT_QUERY") {
       let products;
       try {
-        products = await fetchAllProducts();
+        products = await fetchProductsByQuery(userMessage);
       } catch (err) {
         if (String(err).includes("DB_TIMEOUT")) {
           dbTimeout = true;
           // Retry once
           try {
-            products = await fetchAllProducts();
+            products = await fetchProductsByQuery(userMessage);
           } catch {
-            const reply = `Sorry, I'm having trouble fetching our product details right now, ${customerName}. Give me just a moment.`;
+            const timeoutPrompt = `Apologize to "${customerName}" that you're having trouble fetching product details.
+The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi).
+Keep it under 2 sentences.`;
+            const reply = await callLLM(timeoutPrompt, false);
+
             await writeAgentTurn(callLogId, userMessage, reply, customerName, {
               issue_type: classification,
               sentiment_score: sentimentScore,
@@ -1401,21 +1522,22 @@ Respond with ONLY the classification string.`;
           products = [];
         }
       }
-      const productContext = products.length > 0 ? JSON.stringify(products, null, 2) : "No products in database.";
+      const productContext = products.length > 0 ? JSON.stringify(products, null, 2) : "No products found matching your query.";
 
-      const prompt = `You are a helpful e-commerce support agent named "AI Agent" for ${COMPANY_NAME}.
-The customer's name is "${customerName}". Always address them by name.
+      const prompt = `You are a professional expert sales agent for Elanpro (Commercial Refrigeration). 
+STRICT INSTRUCTIONS:
+1. Use ONLY the product data provided below. Do not use external knowledge.
+2. The customer's name is "${customerName}". Address them by name.
+3. The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi). Do NOT use Romanized script.
+4. Mention technical specs (Model, Capacity, Temp Range).
+5. DO NOT mention prices.
+6. Keep it under 4 sentences.
+7. CRITICAL: Always end your response by asking if they need help with anything else in ${languageName}. Example: "क्या मैं आपकी किसी और चीज़ में मदद कर सकता हूँ?"
 
 PRODUCT DATABASE:
 ${productContext}
 
-Customer query: "${userMessage}"
-
-INSTRUCTIONS:
-- Answer the customer's query using ONLY the product database.
-- Provide specific details (price, stock status, category).
-- Keep response under 3 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+Customer query: "${userMessage}"`;
 
       const response = await callLLM(prompt, false);
       const reply = response.trim();
@@ -1433,9 +1555,14 @@ INSTRUCTIONS:
       });
     }
 
-    if (classification === "ORDER_ISSUE") {
+    if (classification === "ORDER_ISSUE" || classification === "SERVICE_REQUEST") {
       if (!orderId) {
-        const reply = `I understand, ${customerName}. Could you please share your Order ID so I can look into this for you? It usually starts with 'ORD' followed by numbers.`;
+        const orderIdPrompt = `The customer "${customerName}" has an order or service issue but hasn't provided an Order ID.
+Politely ask them to share their Order ID (starts with 'ORD').
+The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi).
+Keep it under 2 sentences.`;
+        const reply = await callLLM(orderIdPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: classification,
           sentiment_score: sentimentScore,
@@ -1459,7 +1586,12 @@ INSTRUCTIONS:
           } catch {
             const ticketId = await generateTicketFromDB(orderId, customerId, "order_issue_db_timeout", `DB timeout for order ${orderId}, customer ${customerName}.`);
             detectedTicketId = ticketId;
-            const reply = `I'm sorry, I'm having persistent trouble accessing our systems. I'm escalating this to our support team. Your ticket ID is ${ticketId}. They will contact you within 24 hours. Is there anything else before I go?`;
+            const timeoutPrompt = `Apologize to "${customerName}" that you're having trouble accessing systems.
+Inform them you've escalated the issue with ticket ID ${ticketId}.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+            const reply = await callLLM(timeoutPrompt, false);
+
             await writeAgentTurn(callLogId, userMessage, reply, customerName, {
               issue_type: classification,
               order_id: orderId,
@@ -1488,7 +1620,12 @@ INSTRUCTIONS:
         if (failures >= 1) {
           const ticketId = await generateTicketFromDB(orderId, customerId, "order_not_found", `Order ${orderId} not found for ${customerName}.`);
           detectedTicketId = ticketId;
-          const reply = `I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}. Is there anything else before I go?`;
+          const escalatePrompt = `Inform "${customerName}" that order ${orderId} was not found. 
+Tell them you are escalating this to the support team with ticket ID ${ticketId}.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+          const reply = await callLLM(escalatePrompt, false);
+
           await writeAgentTurn(callLogId, userMessage, reply, customerName, {
             issue_type: classification,
             order_id: orderId,
@@ -1503,7 +1640,12 @@ INSTRUCTIONS:
             ticket_id: ticketId,
           });
         }
-        const reply = `I wasn't able to find order ${orderId} in our system, ${customerName}. Could you please double-check the Order ID and try again?`;
+        const retryPrompt = `Inform "${customerName}" that order ${orderId} was not found. 
+Ask them to double-check the Order ID and share it again.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(retryPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: classification,
           order_id: orderId,
@@ -1520,26 +1662,23 @@ INSTRUCTIONS:
 
       const tickets = await fetchSupportTicketsForOrder(orderId);
       const orderContext = JSON.stringify(order, null, 2);
-      const ticketContext = tickets.length > 0 ? JSON.stringify(tickets, null, 2) : "No existing support tickets.";
+      const ticketContext = tickets.length > 0 ? JSON.stringify(tickets, null, 2) : "No existing service tickets.";
 
-      const prompt = `You are a polite customer support AI agent named "AI Agent" for ${COMPANY_NAME}.
-The customer's name is "${customerName}". Always address them by name.
+      const prompt = `You are a professional customer support agent for Elanpro (Commercial Refrigeration).
+STRICT INSTRUCTIONS:
+1. Use ONLY the order and ticket data provided below. Do not use external data.
+2. The customer's name is "${customerName}". Address them by name.
+3. The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+4. Provide status for delivery, installation, and warranty.
+5. Keep it under 4 sentences.
 
-ORDER DETAILS:
+ORDER DATA:
 ${orderContext}
 
-EXISTING SUPPORT TICKETS:
+SERVICE TICKETS:
 ${ticketContext}
 
-Customer issue: "${userMessage}"
-
-INSTRUCTIONS:
-- Formulate a helpful resolution matching the status:
-  - If delivery_status is "Pending": Inform them the order is processing and mention the order date.
-  - If delivery_status is "Delivered" and issue_flag is "damaged" or "wrong_item": Apologize, refer to existing ticket if open, or offer a solution (replacement/refund).
-  - Mention specific details from the data (like product name, price, dates).
-- Keep it under 4 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+End by asking if there is anything else you can help with in ${languageName}.`;
 
       const response = await callLLM(prompt, false);
       const reply = response.trim();
@@ -1559,7 +1698,12 @@ INSTRUCTIONS:
 
     if (classification === "ACCOUNT_ISSUE" || classification === "PAYMENT_ISSUE") {
       if (!email && !customerId) {
-        const reply = `I'd be happy to help you with that, ${customerName}. Could you please share your registered email address or Customer ID so I can pull up your account?`;
+        const accountPrompt = `The customer "${customerName}" has an account or payment issue but hasn't provided an email or Customer ID.
+Politely ask them to share their registered email address or Customer ID.
+The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi).
+Keep it under 2 sentences.`;
+        const reply = await callLLM(accountPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: classification,
           sentiment_score: sentimentScore,
@@ -1588,7 +1732,12 @@ INSTRUCTIONS:
           } catch {
             const ticketId = await generateTicketFromDB(null, customerId, `${classification.toLowerCase()}_db_timeout`, `DB timeout for customer ${customerName}.`);
             detectedTicketId = ticketId;
-            const reply = `I'm sorry, I'm having persistent trouble accessing our systems. I'm escalating this to our support team. Your ticket ID is ${ticketId}. They will contact you within 24 hours. Is there anything else before I go?`;
+            const timeoutPrompt = `Apologize to "${customerName}" that you're having trouble accessing systems.
+Inform them you've escalated the issue with ticket ID ${ticketId}.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+            const reply = await callLLM(timeoutPrompt, false);
+
             await writeAgentTurn(callLogId, userMessage, reply, customerName, {
               issue_type: classification,
               sentiment_score: sentimentScore,
@@ -1611,7 +1760,12 @@ INSTRUCTIONS:
         if (failures >= 1) {
           const ticketId = await generateTicketFromDB(null, customerId, "account_not_found", `Account not found for ${customerName}.`);
           detectedTicketId = ticketId;
-          const reply = `I'm escalating this to our support team. They will contact you within 24 hours on your registered number. Your ticket ID is ${ticketId}. Is there anything else before I go?`;
+          const escalatePrompt = `Inform "${customerName}" that their account was not found. 
+Tell them you are escalating this to the support team with ticket ID ${ticketId}.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+          const reply = await callLLM(escalatePrompt, false);
+
           await writeAgentTurn(callLogId, userMessage, reply, customerName, {
             issue_type: classification,
             sentiment_score: sentimentScore,
@@ -1624,7 +1778,12 @@ INSTRUCTIONS:
             ticket_id: ticketId,
           });
         }
-        const reply = `I couldn't find an account with that information, ${customerName}. Could you please verify your registered email address or Customer ID?`;
+        const retryPrompt = `Inform "${customerName}" that their account was not found. 
+Ask them to double-check their registered email address or Customer ID and share it again.
+The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+Keep it under 2 sentences.`;
+        const reply = await callLLM(retryPrompt, false);
+
         await writeAgentTurn(callLogId, userMessage, reply, customerName, {
           issue_type: classification,
           sentiment_score: sentimentScore,
@@ -1643,23 +1802,21 @@ INSTRUCTIONS:
       const customerContext = JSON.stringify(customer, null, 2);
       const ordersContext = orders.length > 0 ? JSON.stringify(orders, null, 2) : "No orders found.";
 
-      const prompt = `You are a polite customer support AI agent named "AI Agent" for ${COMPANY_NAME}.
-The customer's name is "${customerName}". Always address them by name.
+      const prompt = `You are a professional customer support agent for Elanpro (Commercial Refrigeration).
+STRICT INSTRUCTIONS:
+1. Use ONLY the customer and order data provided below. Do not use external data.
+2. The customer's name is "${customerName}". Address them by name.
+3. The conversation is in ${languageName}. Respond ONLY in ${languageName}.
+4. Mention their business type and city.
+5. Keep it under 4 sentences.
 
-CUSTOMER RECORD:
+CUSTOMER DATA:
 ${customerContext}
 
-ORDER HISTORY:
+ORDER DATA:
 ${ordersContext}
 
-Customer issue: "${userMessage}"
-
-INSTRUCTIONS:
-- Formulate a helpful resolution.
-- Mention specific details from the customer record or order history (like email, last order ID, product name, status).
-- For refunds (PAYMENT issues), mention it takes 3-5 business days to process.
-- Keep it under 4 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+End by asking if there is anything else you can help with in ${languageName}.`;
 
       const response = await callLLM(prompt, false);
       const reply = response.trim();
@@ -1678,15 +1835,16 @@ INSTRUCTIONS:
     }
 
     // Classification OTHER
-    const prompt = `You are a helpful customer support AI agent named "AI Agent" for ${COMPANY_NAME}.
+    const prompt = `You are a helpful customer support AI agent named "AI Agent" for Elanpro (Commercial Refrigeration).
 The customer's name is "${customerName}". Always address them by name.
+The conversation is in ${languageName}. Respond ONLY in ${languageName} using native script (e.g. Devnagari for Hindi). Do NOT use Romanized script.
 
 Customer message: "${userMessage}"
 
 INSTRUCTIONS:
 - Respond politely and conversationally.
 - Keep response under 3 sentences.
-- End by asking: "Is there anything else I can help you with, ${customerName}?"`;
+- CRITICAL: Always end your response by asking if they need help with anything else in ${languageName}. Example: "क्या मैं आपकी किसी और चीज़ में मदद कर सकता हूँ?"`;
 
     const response = await callLLM(prompt, false);
     const reply = response.trim();
@@ -1703,7 +1861,16 @@ INSTRUCTIONS:
 
   } catch (error) {
     console.error("Voice AI response error:", error);
-    const reply = "I apologize, but I'm having trouble processing your request right now. Let me transfer you to our team.";
+    // Even in error, try to be multilingual if we have the language name
+    let reply = "I apologize, but I'm having trouble processing your request right now. Let me transfer you to our team.";
+    try {
+      const errorPrompt = `Apologize to the customer politely and say you're having technical trouble and will connect them to a human agent.
+The conversation is in ${languageName || "English"}. Respond ONLY in ${languageName || "English"}.
+Keep it under 2 sentences.`;
+      reply = await callLLM(errorPrompt, false);
+    } catch (llmErr) {
+      console.error("[AI Agent] Fallback error reply failed:", llmErr);
+    }
     return buildResponse(reply, "ESCALATED", {
       sentiment_score: sentimentScore,
     });
