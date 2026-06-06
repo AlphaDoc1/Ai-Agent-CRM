@@ -23,8 +23,8 @@ export default function DistributorsPage() {
     resolver: zodResolver(createDistributorSchema),
   });
 
-  const openEdit = (d: CreateDistributorInput & { id: string }) => {
-    setEditId(d.id);
+  const openEdit = (d: CreateDistributorInput & { distributor_id: string }) => {
+    setEditId(d.distributor_id);
     setValue("name", d.name);
     setValue("state", d.state);
     setValue("region", d.region || "");
@@ -94,7 +94,7 @@ export default function DistributorsPage() {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "16px" }}>
           {distributors.map((d) => (
-            <div key={d.id} className="glass-card" style={{ padding: "24px" }}>
+            <div key={d.distributor_id} className="glass-card" style={{ padding: "24px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                   <div style={{
@@ -116,7 +116,7 @@ export default function DistributorsPage() {
                   <button className="btn-ghost" style={{ padding: "6px", border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)" }} onClick={() => openEdit({ ...d, region: d.region || "", city: d.city || "", address: d.address || "" })}>
                     <Edit2 size={14} />
                   </button>
-                  <button className="btn-ghost" style={{ padding: "6px", border: "none", background: "none", cursor: "pointer", color: "var(--accent-red)" }} onClick={() => handleDelete(d.id)}>
+                  <button className="btn-ghost" style={{ padding: "6px", border: "none", background: "none", cursor: "pointer", color: "var(--accent-red)" }} onClick={() => handleDelete(d.distributor_id)}>
                     <Trash2 size={14} />
                   </button>
                 </div>

@@ -11,6 +11,7 @@ import {
   LogOut,
   Zap,
   TrendingUp,
+  FileText,
 } from "lucide-react";
 
 const navItems = [
@@ -18,6 +19,7 @@ const navItems = [
   { href: "/dashboard/inquiries", label: "Inquiries", icon: MessageSquare },
   { href: "/dashboard/distributors", label: "Distributors", icon: Users },
   { href: "/dashboard/assignments", label: "Assignments", icon: TrendingUp },
+  { href: "/dashboard/analysis", label: "Call Analysis", icon: FileText },
   { href: "/dashboard/voice-agent", label: "Voice Agent", icon: Mic },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];

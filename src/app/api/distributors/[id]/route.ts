@@ -19,7 +19,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     const { data, error } = await supabase
       .from("distributors")
       .select("*")
-      .eq("id", id)
+      .eq("distributor_id", id)
       .single();
 
     if (error) throw error;
@@ -70,7 +70,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     const { data, error } = await supabase
       .from("distributors")
       .update(validation.data)
-      .eq("id", id)
+      .eq("distributor_id", id)
       .select()
       .single();
 
@@ -102,7 +102,7 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     const { error } = await supabase
       .from("distributors")
       .delete()
-      .eq("id", id);
+      .eq("distributor_id", id);
 
     if (error) throw error;
 

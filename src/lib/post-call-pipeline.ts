@@ -85,6 +85,14 @@ export async function processPostCall(callId: string): Promise<PostCallPipelineR
 
   if (turns.length === 0) {
     console.warn("[PostCallPipeline] No turns found for call:", callId);
+    await supabase
+      .from("call_analysis")
+      .update({
+        summary_note: "Short call with no conversation recorded.",
+        resolution_status: "COMPLETED",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("call_id", callId);
     return { success: true };
   }
 

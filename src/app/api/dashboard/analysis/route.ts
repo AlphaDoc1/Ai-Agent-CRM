@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
     
     const { data, error } = await supabase
       .from("call_analysis")
-      .select("*")
+      .select("*, call_logs(created_at, transcript, caller_name, caller_phone, duration_seconds)")
       .order("updated_at", { ascending: false })
       .limit(50);
 

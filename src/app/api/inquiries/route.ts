@@ -23,12 +23,12 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from("inquiries")
-      .select("*, distributor:distributors(*)")
+      .select("*, priority:lead_priority, assigned_distributor_id:assigned_distributor, distributor:distributors(*)")
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (status) query = query.eq("status", status);
-    if (priority) query = query.eq("priority", priority);
+    if (priority) query = query.eq("lead_priority", priority);
     if (search) {
       query = query.or(
         `name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,message.ilike.%${search}%`

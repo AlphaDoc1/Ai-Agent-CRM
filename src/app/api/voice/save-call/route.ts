@@ -21,8 +21,7 @@ export async function POST(request: NextRequest) {
         duration_seconds: duration_seconds || 0,
         transcript: transcript || null,
         ai_summary: ai_summary || null,
-        status: status || "completed",
-        escalated: escalated || false,
+        status: escalated ? "escalated" : (status || "completed"),
       })
       .select()
       .single();

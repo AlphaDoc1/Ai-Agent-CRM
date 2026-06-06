@@ -22,9 +22,14 @@ export interface Distributor {
   region: string;
   state: string;
   city: string;
-  phone: string | null;
-  email: string | null;
+  phone: string;
+  email: string;
+  address?: string;
   product_categories: string | null;
+  is_active: boolean;
+  total_leads_assigned: number;
+  total_conversions: number;
+  created_at: string;
 }
 
 export type InquiryStatus =

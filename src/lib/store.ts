@@ -116,12 +116,12 @@ export const useDistributorStore = create<DistributorState>((set) => ({
   updateDistributor: (id, updates) =>
     set((state) => ({
       distributors: state.distributors.map((d) =>
-        d.id === id ? { ...d, ...updates } : d
+        d.distributor_id === id ? { ...d, ...updates } : d
       ),
     })),
   removeDistributor: (id) =>
     set((state) => ({
-      distributors: state.distributors.filter((d) => d.id !== id),
+      distributors: state.distributors.filter((d) => d.distributor_id !== id),
     })),
   setSelectedDistributor: (distributor) =>
     set({ selectedDistributor: distributor }),
@@ -158,14 +158,27 @@ export interface Notification {
 export interface CallAnalysis {
   id: string;
   call_id: string;
-  issue_type: string;
+  issue_type: string | null;
   customer_id: string | null;
   order_id: string | null;
   sentiment_score: number;
   resolution_status: string;
+  turn_count: number;
+  db_timeout: boolean;
+  notification_flag: boolean;
+  urgent_flag: boolean;
   call_group: string | null;
   summary_note: string | null;
+  pipeline_error: string | null;
   updated_at: string;
+  // Joined data
+  call_logs?: {
+    created_at: string;
+    transcript: string | null;
+    caller_name: string | null;
+    caller_phone: string | null;
+    duration_seconds: number;
+  };
 }
 
 interface DashboardState {

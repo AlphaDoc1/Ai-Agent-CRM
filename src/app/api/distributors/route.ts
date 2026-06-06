@@ -15,7 +15,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("distributors")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("name", { ascending: true });
 
     if (error) throw error;
 
@@ -56,9 +56,13 @@ export async function POST(request: NextRequest) {
     const supabase = createAdminClient();
     const input = validation.data;
 
+    // Generate a distributor_id (e.g., DST_12345)
+    const distributorId = `DST_${Math.floor(10000 + Math.random() * 90000)}`;
+
     const { data, error } = await supabase
       .from("distributors")
       .insert({
+        distributor_id: distributorId,
         name: input.name,
         state: input.state,
         region: input.region || null,
@@ -75,7 +79,7 @@ export async function POST(request: NextRequest) {
     // Log activity
     await supabase.from("activity_logs").insert({
       entity_type: "distributor",
-      entity_id: data.id,
+      entity_id: data.distributor_id,
       action: "distributor_created",
       details: { name: input.name, state: input.state },
     });

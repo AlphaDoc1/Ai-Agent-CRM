@@ -80,8 +80,8 @@ export async function routeLead(
       .from("inquiries")
       .update({
         status: "assigned",
-        assigned_distributor_id: distributor.distributor_id,
-        priority: aiAnalysis.lead_priority as
+        assigned_distributor: distributor.distributor_id,
+        lead_priority: aiAnalysis.lead_priority as
           | "low"
           | "medium"
           | "high"

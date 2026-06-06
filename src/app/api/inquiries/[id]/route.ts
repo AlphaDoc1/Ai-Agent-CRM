@@ -19,7 +19,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
     const { data, error } = await supabase
       .from("inquiries")
-      .select("*, distributor:distributors(*)")
+      .select("*, priority:lead_priority, assigned_distributor_id:assigned_distributor, distributor:distributors(*)")
       .eq("id", id)
       .single();
 
@@ -50,17 +50,18 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     const supabase = createAdminClient();
 
     // Only allow specific fields to be updated
-    const allowedFields = [
-      "status",
-      "priority",
-      "assigned_distributor_id",
-      "inquiry_type",
-      "ai_summary",
-    ];
+    const allowedFieldsMapping: Record<string, string> = {
+      status: "status",
+      priority: "lead_priority",
+      assigned_distributor_id: "assigned_distributor",
+      inquiry_type: "inquiry_type",
+      ai_summary: "ai_summary",
+    };
+
     const updates: Record<string, unknown> = {};
-    for (const field of allowedFields) {
-      if (field in body) {
-        updates[field] = body[field];
+    for (const [frontendField, dbField] of Object.entries(allowedFieldsMapping)) {
+      if (frontendField in body) {
+        updates[dbField] = body[frontendField];
       }
     }
 
