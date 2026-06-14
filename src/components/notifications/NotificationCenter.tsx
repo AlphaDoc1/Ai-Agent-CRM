@@ -134,7 +134,12 @@ export default function NotificationCenter() {
               notifications.map((n) => (
                 <div
                   key={n.id}
-                  onClick={() => markAsRead(n.id)}
+                  onClick={() => {
+                    markAsRead(n.id);
+                    if (n.call_id) {
+                      window.location.href = "/dashboard/analysis";
+                    }
+                  }}
                   style={{
                     padding: "12px",
                     borderRadius: "10px",

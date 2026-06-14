@@ -270,6 +270,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
   fetchCallAnalyses: async () => {
+    set({ isLoading: true });
     try {
       const res = await fetch("/api/dashboard/analysis");
       const json: ApiResponse<CallAnalysis[]> = await res.json();
@@ -278,6 +279,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
     } catch (error) {
       console.error("Failed to fetch call analyses:", error);
+    } finally {
+      set({ isLoading: false });
     }
   },
 }));

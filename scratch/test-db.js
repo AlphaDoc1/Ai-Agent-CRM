@@ -31,7 +31,7 @@ const supabase = createClient(supabaseUrl, serviceRoleKey);
 async function checkDatabase() {
   console.log("Checking tables in database...");
   
-  const tables = ["customers", "products", "orders", "support_tickets", "inquiries", "distributors", "customer_codes"];
+  const tables = ["customers", "products", "orders", "support_tickets", "inquiries", "distributors", "customer_codes", "call_analysis", "call_turns", "notifications", "call_logs"];
   
   for (const table of tables) {
     try {

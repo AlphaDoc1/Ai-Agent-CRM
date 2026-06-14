@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { extractCallMetadata } from "@/lib/ai-agent";
-import { processPostCall } from "@/lib/post-call-pipeline";
+import { runPostCallPipeline } from "@/lib/post-call-pipeline";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
@@ -34,17 +34,20 @@ export async function POST(request: NextRequest) {
     const supabase = createAdminClient();
 
     // 1. Locate the active call log using CallSid
-    const { data: callLog, error: fetchError } = await supabase
+    let callLog: any = null;
+    const { data: callLogList, error: fetchError } = await supabase
       .from("call_logs")
       .select("*")
       .eq("call_sid", callSid)
-      .eq("status", "in_progress")
       .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
+      .limit(1);
 
-    if (fetchError || !callLog) {
-      console.warn(`[Telephony] Active call log not found for CallSid ${callSid} during recording webhook.`);
+    if (fetchError) {
+      console.warn(`[Telephony] Failed to fetch call log for CallSid ${callSid}:`, fetchError.message);
+    } else if (callLogList && callLogList.length > 0) {
+      callLog = callLogList[0];
+    } else {
+      console.warn(`[Telephony] No call log found for CallSid ${callSid}.`);
     }
 
     const callLogId = callLog ? callLog.id : callSid;
@@ -87,67 +90,20 @@ export async function POST(request: NextRequest) {
     fs.writeFileSync(audioFilePath, buffer);
     console.log(`[Telephony] Saved audio recording locally to: ${audioFilePath}`);
 
-    // 3. Attempt Speech-to-Text transcription (prefer Cloud Whisper API if key is present, fallback to local script)
+    // 3. Attempt Speech-to-Text transcription (Strictly use local Whisper script for privacy/cost)
     let transcriptText = "";
-    const groqKey = process.env.GROQ_API_KEY;
-    const openAiKey = process.env.OPENAI_API_KEY;
 
-    if (groqKey || openAiKey) {
-      try {
-        console.log("[Telephony] Cloud Whisper API detected. Preparing audio file upload...");
-        const audioBuffer = fs.readFileSync(audioFilePath);
-        const audioBlob = new Blob([audioBuffer], { type: "audio/wav" });
-        const form = new FormData();
-        form.append("file", audioBlob, "recording.wav");
-
-        let response;
-        if (groqKey) {
-          form.append("model", "whisper-large-v3");
-          response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${groqKey}`,
-            },
-            body: form,
-          });
-        } else {
-          form.append("model", "whisper-1");
-          response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${openAiKey}`,
-            },
-            body: form,
-          });
-        }
-
-        if (response.ok) {
-          const transData = await response.json();
-          transcriptText = transData.text || "";
-          console.log(`[Telephony] Cloud Whisper transcription succeeded: "${transcriptText}"`);
-        } else {
-          const errText = await response.text();
-          console.warn(`[Telephony] Cloud Whisper API returned error status: ${response.status}. Details: ${errText}`);
-        }
-      } catch (cloudSttErr) {
-        console.error("[Telephony] Failed to transcribe via Cloud Whisper API:", cloudSttErr);
+    try {
+      console.log("[Telephony] Running local Whisper Speech-to-Text script...");
+      const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      
+      const { stdout } = await execAsync(`${pythonCmd} scripts/transcribe.py "${audioFilePath}"`);
+      if (stdout && stdout.trim()) {
+        transcriptText = stdout.trim();
+        console.log(`[Telephony] Local Whisper transcription succeeded: "${transcriptText}"`);
       }
-    }
-
-    // Fallback to local python Whisper script
-    if (!transcriptText) {
-      try {
-        console.log("[Telephony] Running local Whisper Speech-to-Text script...");
-        const pythonCmd = process.platform === "win32" ? "python" : "python3";
-        
-        const { stdout } = await execAsync(`${pythonCmd} scripts/transcribe.py "${audioFilePath}"`);
-        if (stdout && stdout.trim()) {
-          transcriptText = stdout.trim();
-          console.log(`[Telephony] Local Whisper transcription succeeded: "${transcriptText}"`);
-        }
-      } catch (whisperError) {
-        console.warn("[Telephony] Local Whisper STT failed or is not configured. Falling back. Error:", whisperError);
-      }
+    } catch (whisperError) {
+      console.warn("[Telephony] Local Whisper STT failed or is not configured. Falling back. Error:", whisperError);
     }
 
     // 4. Clean Fallbacks: Twilio Cloud Transcription -> Live Session Log
@@ -193,11 +149,6 @@ export async function POST(request: NextRequest) {
 
       if (updateError) {
         console.error("[Telephony] Failed to finalize call log record:", updateError);
-      } else {
-        // Trigger post-call pipeline (non-blocking)
-        processPostCall(callLog.id).catch(err => {
-          console.error(`[Telephony] Post-call pipeline failed for call ${callLog.id}:`, err);
-        });
       }
     }
 

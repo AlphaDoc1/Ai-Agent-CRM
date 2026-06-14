@@ -8,15 +8,43 @@ import { createClient } from "@/lib/supabase/client";
 
 function AnalysisCard({ analysis }: { analysis: CallAnalysis }) {
   const [showTranscript, setShowTranscript] = useState(false);
+  const [isReprocessing, setIsReprocessing] = useState(false);
+  const { fetchCallAnalyses } = useDashboardStore();
+
+  const handleReprocess = async () => {
+    setIsReprocessing(true);
+    try {
+      const res = await fetch("/api/dashboard/analysis/reprocess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callId: analysis.call_id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchCallAnalyses(); // Refresh the list
+      } else {
+        alert("Failed to reprocess analysis: " + data.error);
+      }
+    } catch (err) {
+      alert("Error reprocessing analysis");
+    } finally {
+      setIsReprocessing(false);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "RESOLVED": return "var(--accent-green)";
+      case "RESOLVED":
+      case "ENDED": return "var(--accent-green)";
       case "ESCALATED": return "var(--accent-red)";
       case "UNRESOLVED": return "var(--accent-yellow)";
-      default: return "var(--accent-blue)";
+      case "ACTIVE": return "var(--accent-blue)";
+      default: return "var(--text-muted)";
     }
   };
+
+  const isOldActive = analysis.resolution_status === "ACTIVE" && 
+    (Date.now() - new Date(analysis.call_logs?.created_at || analysis.updated_at).getTime() > 5 * 60 * 1000);
 
   return (
     <div className="glass-card" style={{ padding: "24px" }}>
@@ -49,15 +77,35 @@ function AnalysisCard({ analysis }: { analysis: CallAnalysis }) {
             </div>
           </div>
         </div>
-        <div style={{ 
-          padding: "4px 12px", 
-          borderRadius: "20px", 
-          fontSize: "12px", 
-          fontWeight: 600,
-          background: getStatusColor(analysis.resolution_status),
-          color: "white"
-        }}>
-          {analysis.resolution_status}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+          {(isOldActive || analysis.pipeline_error) && (
+            <button
+              onClick={handleReprocess}
+              disabled={isReprocessing}
+              style={{
+                padding: "4px 12px",
+                borderRadius: "6px",
+                fontSize: "12px",
+                background: "rgba(59, 130, 246, 0.1)",
+                color: "var(--accent-blue)",
+                border: "1px solid var(--accent-blue)",
+                cursor: "pointer",
+                opacity: isReprocessing ? 0.5 : 1
+              }}
+            >
+              {isReprocessing ? "Processing..." : "Retry AI Analysis"}
+            </button>
+          )}
+          <div style={{ 
+            padding: "4px 12px", 
+            borderRadius: "20px", 
+            fontSize: "12px", 
+            fontWeight: 600,
+            background: getStatusColor(analysis.resolution_status),
+            color: "white"
+          }}>
+            {analysis.resolution_status}
+          </div>
         </div>
       </div>
 
@@ -163,7 +211,8 @@ function AnalysisCard({ analysis }: { analysis: CallAnalysis }) {
 }
 
 export default function AnalysisPage() {
-  const { callAnalyses: analyses, fetchCallAnalyses, isLoading, addCallAnalysis } = useDashboardStore();
+  const { callAnalyses: analyses, fetchCallAnalyses, isLoading } = useDashboardStore();
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     fetchCallAnalyses();
@@ -188,15 +237,45 @@ export default function AnalysisPage() {
     };
   }, [fetchCallAnalyses]);
 
-  if (isLoading) return <LoadingSpinner />;
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchCallAnalyses();
+    setIsRefreshing(false);
+  };
+
+  if (isLoading && analyses.length === 0) return <LoadingSpinner />;
 
   return (
     <div className="animate-fade-in">
-      <div style={{ marginBottom: "28px" }}>
-        <h1 style={{ fontSize: "26px", fontWeight: 700 }}>AI Call Analysis</h1>
-        <p style={{ color: "var(--text-muted)", fontSize: "14px", marginTop: "4px" }}>
-          Detailed AI-generated summaries and sentiment reports for all support calls
-        </p>
+      <div style={{ marginBottom: "28px", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <h1 style={{ fontSize: "26px", fontWeight: 700 }}>AI Call Analysis</h1>
+          <p style={{ color: "var(--text-muted)", fontSize: "14px", marginTop: "4px" }}>
+            Detailed AI-generated summaries and sentiment reports for all support calls
+          </p>
+        </div>
+        <button 
+          onClick={handleManualRefresh}
+          disabled={isRefreshing || isLoading}
+          style={{
+            padding: "8px 16px",
+            borderRadius: "8px",
+            background: "var(--accent-blue)",
+            color: "white",
+            border: "none",
+            fontSize: "13px",
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            opacity: (isRefreshing || isLoading) ? 0.7 : 1,
+            transition: "all 0.2s ease"
+          }}
+        >
+          <Clock size={16} className={(isRefreshing || isLoading) ? "animate-spin" : ""} />
+          {(isRefreshing || isLoading) ? "Refreshing..." : "Refresh"}
+        </button>
       </div>
 
       <div style={{ display: "grid", gap: "20px" }}>

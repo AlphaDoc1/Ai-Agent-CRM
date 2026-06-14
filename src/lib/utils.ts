@@ -80,6 +80,41 @@ export function debounce<T extends (...args: unknown[]) => unknown>(
   };
 }
 
+/** Resolve public URL dynamically, handling ngrok in localhost */
+export async function resolvePublicUrl(request: Request): Promise<string> {
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3000";
+  const proto = request.headers.get("x-forwarded-proto") || "http";
+  let publicUrl = `${proto}://${host}`;
+
+  // If localhost, try to resolve ngrok tunnel
+  if (host.includes("localhost") || host.includes("127.0.0.1")) {
+    try {
+      // Use a timeout for the ngrok query to avoid hanging if ngrok isn't running
+      const ngrokResponse = await fetch("http://127.0.0.1:4040/api/tunnels", { 
+        signal: AbortSignal.timeout(1000) 
+      });
+      if (ngrokResponse.ok) {
+        const ngrokData = await ngrokResponse.json();
+        const publicTunnel = ngrokData.tunnels?.[0]?.public_url;
+        if (publicTunnel) {
+          publicUrl = publicTunnel;
+          console.log(`[Telephony] Detected localhost. Resolved public Ngrok tunnel: ${publicUrl}`);
+        }
+      }
+    } catch (err) {
+      // ngrok not running or port 4040 not responding
+      console.warn("[Telephony] Localhost detected but could not query Ngrok agent API on port 4040. Using fallback.");
+    }
+  }
+
+  // Final check: if we're still on localhost but have a NEXT_PUBLIC_APP_URL, use that as last resort
+  if (publicUrl.includes("localhost") && process.env.NEXT_PUBLIC_APP_URL) {
+    publicUrl = process.env.NEXT_PUBLIC_APP_URL;
+  }
+
+  return publicUrl.replace(/\/$/, ""); // Remove trailing slash
+}
+
 /** Sleep utility */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

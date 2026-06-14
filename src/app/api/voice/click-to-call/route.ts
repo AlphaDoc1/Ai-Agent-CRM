@@ -3,6 +3,7 @@
 // POST /api/voice/click-to-call
 // ============================================
 import { NextRequest, NextResponse } from "next/server";
+import { resolvePublicUrl } from "@/lib/utils";
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,27 +28,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Resolve public URL dynamically from proxy headers
-    const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3000";
-    const proto = request.headers.get("x-forwarded-proto") || "http";
-    let publicUrl = `${proto}://${host}`;
-
-    // If accessing via localhost, try to resolve the public Ngrok tunnel URL from local Ngrok API
-    if (host.includes("localhost") || host.includes("127.0.0.1")) {
-      try {
-        const ngrokResponse = await fetch("http://127.0.0.1:4040/api/tunnels");
-        if (ngrokResponse.ok) {
-          const ngrokData = await ngrokResponse.json();
-          const publicTunnel = ngrokData.tunnels?.[0]?.public_url;
-          if (publicTunnel) {
-            publicUrl = publicTunnel;
-            console.log(`[Telephony] Detected localhost. Resolved public Ngrok tunnel: ${publicUrl}`);
-          }
-        }
-      } catch (err) {
-        console.warn("[Telephony] Localhost detected but could not query Ngrok agent API on port 4040:", err);
-      }
-    }
+    // Resolve public URL dynamically
+    const publicUrl = await resolvePublicUrl(request);
 
     // Format target phone number (remove spaces)
     const formattedPhone = phone.replace(/\s+/g, "");
@@ -71,6 +53,9 @@ export async function POST(request: NextRequest) {
           To: formattedPhone,
           From: twilioNumber,
           Url: webhookUrl,
+          StatusCallback: `${publicUrl}/api/voice/status-callback`,
+          StatusCallbackEvent: "completed",
+          StatusCallbackMethod: "POST",
         }),
       }
     );

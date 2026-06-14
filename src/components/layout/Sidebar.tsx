@@ -12,6 +12,7 @@ import {
   Zap,
   TrendingUp,
   FileText,
+  TestTube,
 } from "lucide-react";
 
 const navItems = [
@@ -21,6 +22,7 @@ const navItems = [
   { href: "/dashboard/assignments", label: "Assignments", icon: TrendingUp },
   { href: "/dashboard/analysis", label: "Call Analysis", icon: FileText },
   { href: "/dashboard/voice-agent", label: "Voice Agent", icon: Mic },
+  { href: "/test-call", label: "Test Call (Dev)", icon: TestTube },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
